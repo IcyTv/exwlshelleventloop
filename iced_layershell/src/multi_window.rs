@@ -572,6 +572,7 @@ where
 
         // get layer_shell_id so that layer_shell_window can be drop, and ev can be borrow mut
         let layer_shell_id = layer_shell_window.id();
+        let layer_shell_wrapper = Arc::new(layer_shell_window.gen_wrapper());
 
         Self::handle_ui_state(ev, window, ui_state, &mut self.clipboard, false, true);
 
@@ -594,7 +595,31 @@ where
                 compositor::SurfaceError::OutOfMemory => {
                     panic!("{error:?}");
                 }
+                compositor::SurfaceError::Outdated | compositor::SurfaceError::Lost => {
+                    present_span.finish();
+
+                    if error == compositor::SurfaceError::Lost {
+                        window.surface = compositor.create_surface(
+                            layer_shell_wrapper.clone(),
+                            physical_size.width,
+                            physical_size.height,
+                        );
+                    } else {
+                        compositor.configure_surface(
+                            &mut window.surface,
+                            physical_size.width,
+                            physical_size.height,
+                        );
+                    }
+
+                    ev.request_refresh(window.id, RefreshRequest::NextFrame);
+                }
+                compositor::SurfaceError::Occluded => {
+                    present_span.finish();
+                }
                 _ => {
+                    present_span.finish();
+
                     tracing::error!("Error {error:?} when presenting surface.");
                 }
             },
