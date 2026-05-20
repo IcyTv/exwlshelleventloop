@@ -54,6 +54,10 @@ impl<T> shell::Notifier for IcedProxy<Action<T>>
 where
     T: Send,
 {
+    fn tick(&self) {
+        self.request_redraw();
+    }
+
     fn request_redraw(&self) {
         self.send_action(Action::Window(window::Action::RedrawAll));
     }

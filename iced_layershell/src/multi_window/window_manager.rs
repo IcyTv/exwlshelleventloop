@@ -92,13 +92,14 @@ where
         window: Arc<WindowWrapper>,
         application: &Instance<P>,
         compositor: &mut C,
+        renderer_settings: iced_core::renderer::Settings,
         system_theme: iced_core::theme::Mode,
     ) -> &mut Window<P, C> {
         let layerid = window.id();
         let state = State::new(id, application, size, fractal_scale, &window, system_theme);
         let physical_size = state.viewport().physical_size();
         let surface = compositor.create_surface(window, physical_size.width, physical_size.height);
-        let renderer = compositor.create_renderer();
+        let renderer = compositor.create_renderer(renderer_settings);
         let _ = self.aliases.insert(layerid, id);
         let _ = self.back_aliases.insert(id, layerid);
 

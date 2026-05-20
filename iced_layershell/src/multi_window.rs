@@ -59,7 +59,8 @@ pub fn run<P>(
     program: P,
     namespace: &str,
     settings: Settings,
-    compositor_settings: iced_graphics::Settings,
+    compositor_settings: iced_graphics::compositor::Settings,
+    renderer_settings: iced_core::renderer::Settings,
 ) -> Result<(), Error>
 where
     P: IcedProgram + 'static,
@@ -152,6 +153,7 @@ where
     >::new(
         application,
         compositor_settings,
+        renderer_settings,
         runtime,
         settings.fonts,
         system_theme,
@@ -270,7 +272,8 @@ where
     P::Theme: DefaultStyle,
     P::Message: 'static,
 {
-    compositor_settings: iced_graphics::Settings,
+    compositor_settings: iced_graphics::compositor::Settings,
+    renderer_settings: iced_core::renderer::Settings,
     runtime: MultiRuntime<E, P::Message>,
     system_theme: iced_core::theme::Mode,
     fonts: Vec<Cow<'static, [u8]>>,
@@ -297,7 +300,8 @@ where
 {
     pub fn new(
         application: Instance<P>,
-        compositor_settings: iced_graphics::Settings,
+        compositor_settings: iced_graphics::compositor::Settings,
+        renderer_settings: iced_core::renderer::Settings,
         runtime: MultiRuntime<E, P::Message>,
         fonts: Vec<Cow<'static, [u8]>>,
         system_theme: iced_core::theme::Mode,
@@ -305,6 +309,7 @@ where
     ) -> Self {
         Self {
             compositor_settings,
+            renderer_settings,
             runtime,
             system_theme,
             fonts,
@@ -464,12 +469,13 @@ where
                 self.compositor
                     .as_mut()
                     .expect("It should have been created"),
+                self.renderer_settings,
                 self.system_theme,
             );
 
             iced_debug::theme_changed(|| {
                 if is_first {
-                    theme::Base::palette(window.state.theme())
+                    window.state.theme().seed()
                 } else {
                     None
                 }
@@ -491,6 +497,7 @@ where
             events.push(IcedEvent::Window(IcedWindowEvent::Opened {
                 position: None,
                 size: window.state.window_size_f32(),
+                scale_factor: window.state.viewport().scale_factor(),
             }));
             (iced_id, window)
         };
@@ -516,13 +523,8 @@ where
         )));
 
         let draw_span = iced_debug::draw(iced_id);
-        let (ui_state, statuses) = ui.update(
-            &events,
-            cursor,
-            &mut window.renderer,
-            &mut self.clipboard,
-            &mut self.messages,
-        );
+        let (ui_state, statuses) =
+            ui.update(&events, cursor, &mut window.renderer, &mut self.messages);
 
         let physical_size = window.state.viewport().physical_size();
 
@@ -571,7 +573,7 @@ where
         // get layer_shell_id so that layer_shell_window can be drop, and ev can be borrow mut
         let layer_shell_id = layer_shell_window.id();
 
-        Self::handle_ui_state(ev, window, ui_state, false, true);
+        Self::handle_ui_state(ev, window, ui_state, &mut self.clipboard, false, true);
 
         window.draw_preedit();
 
@@ -908,7 +910,6 @@ where
                     &window_events,
                     window.state.cursor(),
                     &mut window.renderer,
-                    &mut self.clipboard,
                     &mut self.messages,
                 );
 
@@ -916,7 +917,14 @@ where
             let unconditional_rendering = true;
             #[cfg(not(feature = "unconditional-rendering"))]
             let unconditional_rendering = false;
-            if Self::handle_ui_state(ev, window, ui_state, unconditional_rendering, false) {
+            if Self::handle_ui_state(
+                ev,
+                window,
+                ui_state,
+                &mut self.clipboard,
+                unconditional_rendering,
+                false,
+            ) {
                 rebuilds.push((iced_id, window));
             }
 
@@ -949,7 +957,7 @@ where
             iced_debug::theme_changed(|| {
                 self.window_manager
                     .first()
-                    .and_then(|window| theme::Base::palette(window.state.theme()))
+                    .and_then(|window| window.state.theme().seed())
             });
 
             for (iced_id, cache) in caches {
@@ -981,6 +989,7 @@ where
         ev: &mut WindowState<IcedId>,
         window: &mut Window<P, C>,
         ui_state: user_interface::State,
+        layer_shell_clipboard: &mut LayerShellClipboard,
         unconditional_rendering: bool,
         update_ime: bool,
     ) -> bool {
@@ -990,8 +999,11 @@ where
                 redraw_request,
                 input_method,
                 mouse_interaction,
+                clipboard,
                 ..
             } => {
+                crate::clipboard::process_requests(clipboard, layer_shell_clipboard);
+
                 if unconditional_rendering {
                     ev.request_refresh(window.id, RefreshRequest::NextFrame);
                 } else {
@@ -1138,11 +1150,11 @@ pub(crate) fn run_action<P, C, E: Executor>(
             }
         },
         Action::Clipboard(action) => match action {
-            clipboard::Action::Read { target, channel } => {
-                let _ = channel.send(clipboard.read(target));
+            clipboard::Action::Read { kind, channel } => {
+                let _ = channel.send(clipboard.read(kind));
             }
-            clipboard::Action::Write { target, contents } => {
-                clipboard.write(target, contents);
+            clipboard::Action::Write { content, channel } => {
+                let _ = channel.send(clipboard.write(content));
             }
         },
         Action::Widget(action) => {
@@ -1234,13 +1246,21 @@ pub(crate) fn run_action<P, C, E: Executor>(
         Action::Exit => {
             *should_exit = true;
         }
-        Action::LoadFont { bytes, channel } => {
-            if let Some(compositor) = compositor {
-                // TODO: Error handling (?)
-                compositor.load_font(bytes.clone());
-
-                let _ = channel.send(Ok(()));
+        Action::Font(action) => match action {
+            iced_runtime::font::Action::Load { bytes, channel } => {
+                if let Some(compositor) = compositor.as_mut() {
+                    compositor.load_font(bytes);
+                    let _ = channel.send(Ok(()));
+                }
             }
+            iced_runtime::font::Action::List { channel } => {
+                let _ = channel.send(Ok(Vec::new()));
+            }
+            iced_runtime::font::Action::SetDefaults { .. } => {}
+        },
+        Action::Event { .. } => {}
+        Action::Tick => {
+            ev.request_refresh_all(RefreshRequest::NextFrame);
         }
         Action::Reload => {
             for (iced_id, window) in window_manager.iter_mut() {

@@ -676,9 +676,12 @@ impl<P: Program> Daemon<P> {
 
         #[cfg(any(not(feature = "debug"), target_arch = "wasm32"))]
         let program = self.raw;
-        let renderer_settings = iced_graphics::Settings {
+        let renderer_settings = iced_core::renderer::Settings {
             default_font: settings.default_font,
             default_text_size: settings.default_text_size,
+        };
+
+        let compositor_settings = iced_graphics::compositor::Settings {
             antialiasing: if settings.antialiasing {
                 Some(iced_graphics::Antialiasing::MSAAx4)
             } else {
@@ -692,7 +695,13 @@ impl<P: Program> Daemon<P> {
                 || matches!(settings.layer_settings.start_mode, StartMode::Background),
             "Size must be specified unless start_mode is Background"
         );
-        crate::multi_window::run(program, &self.namespace, settings, renderer_settings)
+        crate::multi_window::run(
+            program,
+            &self.namespace,
+            settings,
+            compositor_settings,
+            renderer_settings,
+        )
     }
 
     pub fn settings(self, settings: Settings) -> Self {

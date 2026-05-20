@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use iced_core::Clipboard;
-use iced_core::clipboard::Kind;
+use iced_core::clipboard::{Content, Error, Kind};
 use layershellev::WindowWrapper;
 
 static DISABLED: AtomicBool = AtomicBool::new(false);
@@ -44,44 +43,45 @@ impl LayerShellClipboard {
         }
     }
 
-    /// Reads the current content of the [`Clipboard`] as text.
-    pub fn read(&self, kind: Kind) -> Option<String> {
+    /// Reads the current content of the clipboard.
+    pub fn read(&self, kind: Kind) -> Result<Content, Error> {
         match &self.state {
             State::Connected(clipboard) => match kind {
-                Kind::Standard => clipboard.read().ok(),
-                Kind::Primary => clipboard.read_primary().and_then(Result::ok),
+                Kind::Text => clipboard
+                    .read()
+                    .map(Content::Text)
+                    .map_err(|_| Error::ClipboardUnavailable),
+                _ => Err(Error::ContentNotAvailable),
             },
-            State::Unavailable => None,
+            State::Unavailable => Err(Error::ClipboardUnavailable),
         }
     }
 
-    /// Writes the given text contents to the [`Clipboard`].
-    pub fn write(&mut self, kind: Kind, contents: String) {
+    /// Writes the given contents to the clipboard.
+    pub fn write(&mut self, contents: Content) -> Result<(), Error> {
         match &mut self.state {
-            State::Connected(clipboard) => {
-                let result = match kind {
-                    Kind::Standard => clipboard.write(contents),
-                    Kind::Primary => clipboard.write_primary(contents).unwrap_or(Ok(())),
-                };
-
-                match result {
-                    Ok(()) => {}
-                    Err(error) => {
-                        log::warn!("error writing to clipboard: {error}");
-                    }
-                }
-            }
-            State::Unavailable => {}
+            State::Connected(clipboard) => match contents {
+                Content::Text(contents) => clipboard
+                    .write(contents)
+                    .map_err(|_| Error::ClipboardUnavailable),
+                _ => Err(Error::ContentNotAvailable),
+            },
+            State::Unavailable => Err(Error::ClipboardUnavailable),
         }
     }
 }
 
-impl Clipboard for LayerShellClipboard {
-    fn read(&self, kind: Kind) -> Option<String> {
-        self.read(kind)
+pub(crate) fn process_requests(
+    requests: iced_core::Clipboard,
+    clipboard: &mut LayerShellClipboard,
+) {
+    for kind in requests.reads {
+        let _ = clipboard.read(kind);
     }
 
-    fn write(&mut self, kind: Kind, contents: String) {
-        self.write(kind, contents);
+    if let Some(content) = requests.write {
+        if let Err(error) = clipboard.write(content) {
+            log::warn!("error writing to clipboard: {error:?}");
+        }
     }
 }

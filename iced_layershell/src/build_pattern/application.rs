@@ -601,22 +601,31 @@ impl<P: Program> SingleApplication<P> {
         let program = self.raw;
 
         #[allow(clippy::needless_update)]
-        let renderer_settings = iced_graphics::Settings {
+        let renderer_settings = iced_core::renderer::Settings {
             default_font: settings.default_font,
             default_text_size: settings.default_text_size,
+        };
+
+        let compositor_settings = iced_graphics::compositor::Settings {
             antialiasing: if settings.antialiasing {
                 Some(iced_graphics::Antialiasing::MSAAx4)
             } else {
                 None
             },
-            ..iced_graphics::Settings::default()
+            ..iced_graphics::compositor::Settings::default()
         };
         use layershellev::StartMode;
         assert!(!matches!(
             settings.layer_settings.start_mode,
             StartMode::AllScreens | StartMode::Background
         ));
-        crate::multi_window::run(program, &self.namespace, settings, renderer_settings)
+        crate::multi_window::run(
+            program,
+            &self.namespace,
+            settings,
+            compositor_settings,
+            renderer_settings,
+        )
     }
 
     pub fn settings(self, settings: Settings) -> Self {
