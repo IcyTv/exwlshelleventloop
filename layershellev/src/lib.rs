@@ -321,6 +321,16 @@ impl ZxdgOutputInfo {
     pub fn get_logical_size(&self) -> (i32, i32) {
         self.logical_size
     }
+
+    /// Returns the compositor-provided xdg-output name for this output.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the compositor-provided xdg-output description for this output.
+    pub fn description(&self) -> &str {
+        &self.description
+    }
 }
 
 /// This is the unit, binding to per screen.

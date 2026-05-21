@@ -502,6 +502,12 @@ where
             (iced_id, window)
         };
 
+        if let Some(output_info) = layer_shell_window.get_xdgoutput_info()
+            && !output_info.name().is_empty()
+        {
+            crate::window::set_output_name(iced_id, output_info.name());
+        }
+
         let compositor = self
             .compositor
             .as_mut()
@@ -638,6 +644,7 @@ where
             return;
         };
         self.cached_layer_dimensions.remove(&iced_id);
+        crate::window::remove_output_name(iced_id);
         self.window_manager.remove(iced_id);
         self.user_interfaces.remove(&iced_id);
         self.runtime
