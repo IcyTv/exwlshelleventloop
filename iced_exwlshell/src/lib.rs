@@ -21,6 +21,7 @@ pub mod reexport {
     pub use exwlshellev::reexport::KeyboardInteractivity;
     pub use exwlshellev::reexport::Layer;
     pub use exwlshellev::reexport::wayland_client::{WlRegion, wl_keyboard};
+    pub use wayland_protocols::xdg::shell::client::xdg_positioner;
     pub mod core {
         pub use iced_core::*;
     }
