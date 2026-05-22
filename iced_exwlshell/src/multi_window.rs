@@ -586,11 +586,13 @@ where
                 (physical_size, window.state.viewport().scale_factor()),
             );
 
-            compositor.configure_surface(
-                &mut window.surface,
-                physical_size.width,
-                physical_size.height,
-            );
+            if physical_size.width > 0 && physical_size.height > 0 {
+                compositor.configure_surface(
+                    &mut window.surface,
+                    physical_size.width,
+                    physical_size.height,
+                );
+            }
         }
 
         for (idx, event) in events.into_iter().enumerate() {
@@ -622,6 +624,10 @@ where
         Self::handle_ui_state(ev, window, ui_state, false, true);
 
         window.draw_preedit();
+
+        if physical_size.width == 0 || physical_size.height == 0 {
+            return;
+        }
 
         let present_span = iced_debug::present(iced_id);
         match compositor.present(
