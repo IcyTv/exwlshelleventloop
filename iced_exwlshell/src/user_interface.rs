@@ -147,6 +147,19 @@ where
         let ui: IcedUserInterface<'static, _, _, _> = unsafe { mem::transmute(ui) };
         self.uis.insert(id, ui);
     }
+
+    pub fn measure(&self, id: Id, renderer: &mut P::Renderer, size: Size) -> Size {
+        let view_span = iced_debug::view(id);
+        let view = self.application.view(id);
+        view_span.finish();
+
+        let layout_span = iced_debug::layout(id);
+        let ui = IcedUserInterface::build(view, size, Cache::default(), renderer);
+        let measured = ui.size();
+        layout_span.finish();
+
+        measured
+    }
 }
 
 impl<P: Program> Drop for UserInterfaces<P> {

@@ -1,6 +1,7 @@
 use crate::reexport::{Anchor, Layer, WlRegion};
 use iced_core::window::Id as IcedId;
 use layershellev::{NewInputPanelSettings, NewLayerShellSettings, NewXdgWindowSettings};
+use wayland_protocols::xdg::shell::client::xdg_positioner::ConstraintAdjustment;
 
 use std::sync::Arc;
 
@@ -23,9 +24,26 @@ impl From<IcedXdgWindowSettings> for NewXdgWindowSettings {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum PopupSize {
+    Fixed(u32, u32),
+    FitContent { min: (u32, u32), max: (u32, u32) },
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum PopupPlacement {
+    BottomStart,
+    BottomEnd,
+    TopStart,
+    TopEnd,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub struct IcedNewPopupSettings {
-    pub size: (u32, u32),
-    pub position: (i32, i32),
+    pub size: PopupSize,
+    pub anchor_rect: (i32, i32, i32, i32),
+    pub offset: (i32, i32),
+    pub placement: PopupPlacement,
+    pub constraint_adjustment: ConstraintAdjustment,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

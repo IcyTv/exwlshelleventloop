@@ -32,6 +32,7 @@ iced_devtools.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
 exwlshellev.workspace = true
+wayland-protocols.workspace = true
 window_clipboard.workspace = true
 log.workspace = true
 futures.workspace = true

@@ -3,6 +3,10 @@ use wayland_protocols_wlr::layer_shell::v1::client::{
     zwlr_layer_surface_v1::{Anchor, KeyboardInteractivity},
 };
 
+use wayland_protocols::xdg::shell::client::xdg_positioner::{
+    Anchor as XdgAnchor, ConstraintAdjustment, Gravity,
+};
+
 use wayland_client::{
     QueueHandle, WEnum,
     globals::GlobalList,
@@ -108,6 +112,11 @@ pub struct NewPopUpSettings {
     pub size: (u32, u32),
     /// the position of the popup, relative to the he layersurface
     pub position: (i32, i32),
+    /// the rectangle in the parent surface the popup should be anchored to
+    pub anchor_rect: (i32, i32, i32, i32),
+    pub anchor: XdgAnchor,
+    pub gravity: Gravity,
+    pub constraint_adjustment: ConstraintAdjustment,
     /// It means where the popup is, on which surface. It is the id of that layershell
     pub id: id::Id,
 }

@@ -2681,7 +2681,11 @@ impl<T: 'static> WindowState<T> {
                         ReturnData::NewPopUp((
                             NewPopUpSettings {
                                 size: (width, height),
-                                position: (x, y),
+                                position: (offset_x, offset_y),
+                                anchor_rect: (x, y, anchor_width, anchor_height),
+                                anchor,
+                                gravity,
+                                constraint_adjustment,
                                 id,
                             },
                             targetid,
@@ -2708,7 +2712,11 @@ impl<T: 'static> WindowState<T> {
                             let wl_surface = wmcompositer.create_surface(&qh, ());
                             let positioner = wmbase.create_positioner(&qh, ());
                             positioner.set_size(width as i32, height as i32);
-                            positioner.set_anchor_rect(x, y, width as i32, height as i32);
+                            positioner.set_anchor_rect(x, y, anchor_width, anchor_height);
+                            positioner.set_anchor(anchor);
+                            positioner.set_gravity(gravity);
+                            positioner.set_constraint_adjustment(constraint_adjustment);
+                            positioner.set_offset(offset_x, offset_y);
                             let wl_xdg_surface = wmbase.get_xdg_surface(&wl_surface, &qh, ());
                             let popup = wl_xdg_surface.get_popup(None, &positioner, &qh, ());
 

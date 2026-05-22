@@ -1,6 +1,8 @@
 use crate::{
     DefaultStyle, FromShellInfo,
-    actions::{ExwlShellCustomActionWithId, IcedNewPopupSettings, MenuDirection},
+    actions::{
+        ExwlShellCustomActionWithId, IcedNewPopupSettings, MenuDirection, PopupPlacement, PopupSize,
+    },
     ime_preedit::ImeState,
     multi_window::window_manager::WindowManager,
     settings::VirtualKeyboardSettings,
@@ -47,12 +49,31 @@ use std::{
     task::Poll,
     time::Duration,
 };
+use wayland_protocols::xdg::shell::client::xdg_positioner::{
+    Anchor as XdgAnchor, ConstraintAdjustment, Gravity,
+};
 use window_manager::Window;
 
 mod state;
 mod window_manager;
 
 type MultiRuntime<E, Message> = Runtime<E, IcedProxy<Action<Message>>, Action<Message>>;
+
+fn positioner_placement(placement: PopupPlacement) -> (XdgAnchor, Gravity) {
+    match placement {
+        PopupPlacement::BottomStart => (XdgAnchor::BottomLeft, Gravity::BottomRight),
+        PopupPlacement::BottomEnd => (XdgAnchor::BottomRight, Gravity::BottomLeft),
+        PopupPlacement::TopStart => (XdgAnchor::TopLeft, Gravity::TopRight),
+        PopupPlacement::TopEnd => (XdgAnchor::TopRight, Gravity::TopLeft),
+    }
+}
+
+fn clamp_popup_size(size: Size, min: (u32, u32), max: (u32, u32)) -> (u32, u32) {
+    let width = (size.width.ceil() as u32).clamp(min.0, max.0);
+    let height = (size.height.ceil() as u32).clamp(min.1, max.1);
+
+    (width, height)
+}
 
 // a dispatch loop, another is listen loop
 pub fn run<P>(
@@ -839,13 +860,41 @@ where
                 settings: menusettings,
                 id: iced_id,
             } => {
-                let IcedNewPopupSettings { size, position } = menusettings;
+                let IcedNewPopupSettings {
+                    size,
+                    anchor_rect,
+                    offset,
+                    placement,
+                    constraint_adjustment,
+                } = menusettings;
                 let Some(parent_layer_shell_id) = ev.current_surface_id() else {
                     return;
                 };
+                let size = match size {
+                    PopupSize::Fixed(width, height) => (width, height),
+                    PopupSize::FitContent { min, max } => {
+                        if let Some(compositor) = self.compositor.as_ref() {
+                            let mut renderer = compositor.create_renderer(self.renderer_settings);
+                            let measured = self.user_interfaces.measure(
+                                iced_id,
+                                &mut renderer,
+                                Size::new(max.0 as f32, max.1 as f32),
+                            );
+
+                            clamp_popup_size(measured, min, max)
+                        } else {
+                            min
+                        }
+                    }
+                };
+                let (anchor, gravity) = positioner_placement(placement);
                 let popup_settings = NewPopUpSettings {
                     size,
-                    position,
+                    position: offset,
+                    anchor_rect,
+                    anchor,
+                    gravity,
+                    constraint_adjustment,
                     id: parent_layer_shell_id,
                 };
                 let layer_shell_id = exwlshellev::id::Id::unique();
@@ -876,7 +925,14 @@ where
                 }
                 let popup_settings = NewPopUpSettings {
                     size: menu_setting.size,
-                    position: (x, y),
+                    position: (0, 0),
+                    anchor_rect: (x, y, 1, 1),
+                    anchor: XdgAnchor::TopLeft,
+                    gravity: Gravity::BottomRight,
+                    constraint_adjustment: ConstraintAdjustment::SlideX
+                        | ConstraintAdjustment::SlideY
+                        | ConstraintAdjustment::FlipX
+                        | ConstraintAdjustment::FlipY,
                     id: parent_layer_shell_id,
                 };
                 let layer_shell_id = exwlshellev::id::Id::unique();
