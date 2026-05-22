@@ -1068,11 +1068,10 @@ where
 
         for (iced_id, (settings, popup_id, last_size)) in self.tracked_popups.iter_mut() {
             if let PopupSize::FitContent { min, max } = settings.size {
-                if let Some(compositor) = self.compositor.as_ref() {
-                    let mut renderer = compositor.create_renderer(self.compositor_settings);
+                if let Some(window) = self.window_manager.get_mut(*iced_id) {
                     let measured = self.user_interfaces.measure(
                         *iced_id,
-                        &mut renderer,
+                        &mut window.renderer,
                         Size::new(max.0 as f32, max.1 as f32),
                     );
                     let new_size = clamp_popup_size(measured, min, max);
