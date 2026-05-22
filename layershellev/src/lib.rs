@@ -2785,6 +2785,32 @@ impl<T: 'static> WindowState<T> {
                                 .build(),
                             );
                         }
+                        ReturnData::RepositionPopUp((
+                            NewPopUpSettings {
+                                size: (width, height),
+                                position: (offset_x, offset_y),
+                                anchor_rect: (x, y, anchor_width, anchor_height),
+                                anchor,
+                                gravity,
+                                constraint_adjustment,
+                                ..
+                            },
+                            popup_id,
+                        )) => {
+                            if let Some(unit) = window_state.units.iter().find(|unit| unit.id == popup_id) {
+                                if let Shell::PopUp((popup, _)) = &unit.shell {
+                                    let positioner = wmbase.create_positioner(&qh, ());
+                                    positioner.set_size(width as i32, height as i32);
+                                    positioner.set_anchor_rect(x, y, anchor_width, anchor_height);
+                                    positioner.set_anchor(anchor);
+                                    positioner.set_gravity(gravity);
+                                    positioner.set_constraint_adjustment(constraint_adjustment);
+                                    positioner.set_offset(offset_x, offset_y);
+                                    popup.reposition(&positioner, 0);
+                                    positioner.destroy();
+                                }
+                            }
+                        }
                         ReturnData::NewXdgBase((
                             NewXdgWindowSettings {
                                 title,

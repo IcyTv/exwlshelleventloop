@@ -187,6 +187,7 @@ pub enum ReturnData<INFO> {
     NewPopUp((NewPopUpSettings, id::Id, Option<INFO>)),
     NewXdgBase((NewXdgWindowSettings, id::Id, Option<INFO>)),
     NewInputPanel((NewInputPanelSettings, id::Id, Option<INFO>)),
+    RepositionPopUp((NewPopUpSettings, id::Id)),
     None,
 }
 

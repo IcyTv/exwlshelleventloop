@@ -310,6 +310,7 @@ where
     messages: Vec<P::Message>,
     proxy: IcedProxy<Action<P::Message>>,
     time: Instant,
+    tracked_popups: HashMap<IcedId, (IcedNewPopupSettings, exwlshellev::id::Id, (u32, u32))>,
 }
 
 impl<P, E, C> Context<P, E, C>
@@ -344,6 +345,7 @@ where
             messages: Default::default(),
             proxy,
             time: Instant::now(),
+            tracked_popups: HashMap::new(),
         }
     }
 
@@ -657,6 +659,7 @@ where
             return;
         };
         self.cached_layer_dimensions.remove(&iced_id);
+        self.tracked_popups.remove(&iced_id);
         self.window_manager.remove(iced_id);
         self.user_interfaces.remove(&iced_id);
         self.runtime
@@ -902,6 +905,7 @@ where
                     id: parent_layer_shell_id,
                 };
                 let layer_shell_id = exwlshellev::id::Id::unique();
+                self.tracked_popups.insert(iced_id, (menusettings, layer_shell_id, size));
                 ev.append_return_data(ReturnData::NewPopUp((
                     popup_settings,
                     layer_shell_id,
@@ -1058,6 +1062,34 @@ where
                         &mut window.renderer,
                         window.state.viewport().logical_size(),
                     );
+                }
+            }
+        }
+
+        for (iced_id, (settings, popup_id, last_size)) in self.tracked_popups.iter_mut() {
+            if let PopupSize::FitContent { min, max } = settings.size {
+                if let Some(compositor) = self.compositor.as_ref() {
+                    let mut renderer = compositor.create_renderer(self.compositor_settings);
+                    let measured = self.user_interfaces.measure(
+                        *iced_id,
+                        &mut renderer,
+                        Size::new(max.0 as f32, max.1 as f32),
+                    );
+                    let new_size = clamp_popup_size(measured, min, max);
+                    if new_size != *last_size {
+                        *last_size = new_size;
+                        let (anchor, gravity) = positioner_placement(settings.placement);
+                        let popup_settings = NewPopUpSettings {
+                            size: new_size,
+                            position: settings.offset,
+                            anchor_rect: settings.anchor_rect,
+                            anchor,
+                            gravity,
+                            constraint_adjustment: settings.constraint_adjustment,
+                            id: *popup_id,
+                        };
+                        ev.append_return_data(ReturnData::RepositionPopUp((popup_settings, *popup_id)));
+                    }
                 }
             }
         }
