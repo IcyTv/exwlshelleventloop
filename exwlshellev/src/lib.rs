@@ -397,6 +397,10 @@ impl PartialEq<ExtSessionLockSurfaceV1> for Shell {
     }
 }
 impl Shell {
+    fn needs_xdg_configure_ack(&self) -> bool {
+        matches!(self, Self::PopUp(_) | Self::XdgTopLevel(_))
+    }
+
     fn destroy(&self) {
         match self {
             Self::PopUp((popup, xdg_surface)) => {
@@ -455,6 +459,8 @@ impl<T> WindowStateUnitBuilder<T> {
         wl_surface: WlSurface,
         shell: Shell,
     ) -> Self {
+        let configured = !shell.needs_xdg_configure_ack();
+
         Self {
             inner: WindowStateUnit {
                 id,
@@ -470,6 +476,7 @@ impl<T> WindowStateUnitBuilder<T> {
                 wl_output: Default::default(),
                 binding: Default::default(),
                 becreated: Default::default(),
+                configured,
                 // Unknown why it is 120
                 scale: 120,
                 request_flag: Default::default(),
@@ -554,6 +561,7 @@ pub struct WindowStateUnit<T> {
     wl_output: Option<WlOutput>,
     binding: Option<T>,
     becreated: bool,
+    configured: bool,
 
     scale: u32,
     request_flag: WindowStateUnitRequestFlag,
@@ -804,6 +812,10 @@ impl<T> WindowStateUnit<T> {
     /// or `None` if no refresh is pending or the present slot is
     /// unavailable (waiting for a compositor frame callback).
     fn refresh_timeout(&self) -> Option<Duration> {
+        if !self.configured {
+            return None;
+        }
+
         match self.request_flag.refresh {
             RefreshRequest::NextFrame => {
                 if self.present_available_state == PresentAvailableState::Available {
@@ -834,6 +846,10 @@ impl<T> WindowStateUnit<T> {
     }
 
     pub fn take_present_slot(&mut self) -> bool {
+        if !self.configured {
+            return false;
+        }
+
         if !self.should_refresh() {
             return false;
         }
@@ -1706,7 +1722,10 @@ impl<T> Dispatch<xdg_surface::XdgSurface, ()> for WindowState<T> {
                 .units
                 .iter_mut()
                 .filter(|unit| unit.shell == *surface)
-                .for_each(|unit| unit.request_refresh(RefreshRequest::NextFrame));
+                .for_each(|unit| {
+                    unit.configured = true;
+                    unit.request_refresh(RefreshRequest::NextFrame);
+                });
         }
     }
 }
