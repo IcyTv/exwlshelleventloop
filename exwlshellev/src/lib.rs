@@ -2900,6 +2900,11 @@ impl<T: 'static> WindowState<T> {
                                     .collect::<Vec<_>>();
 
                                 for popup_id in popup_ids {
+                                    window_state.handle_event(
+                                        &mut *event_handler,
+                                        ExWlShellEvent::RequestMessages(&DispatchMessage::Closed),
+                                        Some(popup_id),
+                                    );
                                     let _ = window_state.remove_shell(popup_id);
                                 }
 
