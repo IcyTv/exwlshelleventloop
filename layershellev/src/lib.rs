@@ -2687,6 +2687,17 @@ impl<T: 'static> WindowState<T> {
                             targetid,
                             info,
                         )) => {
+                            let popup_ids = window_state
+                                .units
+                                .iter()
+                                .filter(|unit| unit.is_popup())
+                                .map(WindowStateUnit::id)
+                                .collect::<Vec<_>>();
+
+                            for popup_id in popup_ids {
+                                let _ = window_state.remove_shell(popup_id);
+                            }
+
                             let Some(index) = window_state
                                 .units
                                 .iter()
