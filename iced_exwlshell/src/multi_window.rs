@@ -62,9 +62,13 @@ type MultiRuntime<E, Message> = Runtime<E, IcedProxy<Action<Message>>, Action<Me
 fn positioner_placement(placement: PopupPlacement) -> (XdgAnchor, Gravity) {
     match placement {
         PopupPlacement::BottomStart => (XdgAnchor::BottomLeft, Gravity::BottomRight),
+        PopupPlacement::BottomCenter => (XdgAnchor::Bottom, Gravity::Bottom),
         PopupPlacement::BottomEnd => (XdgAnchor::BottomRight, Gravity::BottomLeft),
         PopupPlacement::TopStart => (XdgAnchor::TopLeft, Gravity::TopRight),
+        PopupPlacement::TopCenter => (XdgAnchor::Top, Gravity::Top),
         PopupPlacement::TopEnd => (XdgAnchor::TopRight, Gravity::TopLeft),
+        PopupPlacement::LeftCenter => (XdgAnchor::Left, Gravity::Left),
+        PopupPlacement::RightCenter => (XdgAnchor::Right, Gravity::Right),
     }
 }
 

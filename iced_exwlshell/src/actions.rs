@@ -32,9 +32,13 @@ pub enum PopupSize {
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum PopupPlacement {
     BottomStart,
+    BottomCenter,
     BottomEnd,
     TopStart,
+    TopCenter,
     TopEnd,
+    LeftCenter,
+    RightCenter,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
