@@ -1759,14 +1759,22 @@ impl<T> Dispatch<xdg_popup::XdgPopup, ()> for WindowState<T> {
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        if let xdg_popup::Event::Configure { width, height, .. } = event {
-            let Some(unit_index) = state.units.iter().position(|unit| unit.shell == *surface)
-            else {
-                return;
-            };
-            state.units[unit_index].size = (width as u32, height as u32);
-
-            state.units[unit_index].request_refresh(RefreshRequest::NextFrame)
+        match event {
+            xdg_popup::Event::Configure { width, height, .. } => {
+                let Some(unit_index) = state.units.iter().position(|unit| unit.shell == *surface)
+                else {
+                    return;
+                };
+                state.units[unit_index].size = (width as u32, height as u32);
+            }
+            xdg_popup::Event::PopupDone => {
+                let Some(unit_index) = state.units.iter().position(|unit| unit.shell == *surface)
+                else {
+                    return;
+                };
+                state.units[unit_index].request_close();
+            }
+            _ => {}
         }
     }
 }
@@ -2697,6 +2705,12 @@ impl<T: 'static> WindowState<T> {
                                 unreachable!()
                             };
                             shell.get_popup(&popup);
+
+                            if let (Some(seat), Some(serial)) =
+                                (window_state.seat_back.as_ref(), window_state.enter_serial)
+                            {
+                                popup.grab(seat, serial);
+                            }
 
                             let mut fractional_scale = None;
                             if let Some(ref fractional_scale_manager) = fractional_scale_manager {
