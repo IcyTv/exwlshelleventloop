@@ -484,7 +484,10 @@ where
                 let layout_span = iced_debug::layout(iced_id);
                 window.state.update_view_port(width, height, scale_float);
                 if let Some(ui) = self.user_interfaces.ui_mut(&iced_id) {
-                    ui.relayout(window.state.viewport().logical_size(), &mut window.renderer);
+                    ui.relayout(
+                        window.state.viewport().logical_size(),
+                        &mut window.renderer.borrow_mut(),
+                    );
                 }
                 layout_span.finish();
                 events.push(IcedEvent::Window(IcedWindowEvent::Resized(
@@ -532,7 +535,7 @@ where
             self.user_interfaces.build(
                 iced_id,
                 user_interface::Cache::default(),
-                &mut window.renderer,
+                &mut window.renderer.borrow_mut(),
                 window.state.viewport().logical_size(),
             );
 
@@ -571,8 +574,12 @@ where
         )));
 
         let draw_span = iced_debug::draw(iced_id);
-        let (ui_state, statuses) =
-            ui.update(&events, cursor, &mut window.renderer, &mut self.messages);
+        let (ui_state, statuses) = ui.update(
+            &events,
+            cursor,
+            &mut window.renderer.borrow_mut(),
+            &mut self.messages,
+        );
 
         let physical_size = window.state.viewport().physical_size();
 
@@ -612,7 +619,7 @@ where
         }
 
         ui.draw(
-            &mut window.renderer,
+            &mut window.renderer.borrow_mut(),
             window.state.theme(),
             &iced_core::renderer::Style {
                 text_color: window.state.text_color(),
@@ -636,7 +643,7 @@ where
         let present_span = iced_debug::present(iced_id);
         tracing::debug!(?iced_id, width = physical_size.width, height = physical_size.height, "presenting surface");
         match compositor.present(
-            &mut window.renderer,
+            &mut window.renderer.borrow_mut(),
             &mut window.surface,
             window.state.viewport(),
             window.state.background_color(),
@@ -917,7 +924,7 @@ where
                         {
                             let measured = self.user_interfaces.measure(
                                 iced_id,
-                                &mut window.renderer,
+                                &mut window.renderer.borrow_mut(),
                                 Size::new(max.0 as f32, max.1 as f32),
                             );
 
@@ -1030,7 +1037,7 @@ where
                 .update(
                     &window_events,
                     window.state.cursor(),
-                    &mut window.renderer,
+                    &mut window.renderer.borrow_mut(),
                     &mut self.messages,
                 );
 
@@ -1088,7 +1095,7 @@ where
                 self.user_interfaces.build(
                     iced_id,
                     cache,
-                    &mut window.renderer,
+                    &mut window.renderer.borrow_mut(),
                     window.state.viewport().logical_size(),
                 );
             }
@@ -1098,7 +1105,7 @@ where
                     self.user_interfaces.build(
                         iced_id,
                         cache,
-                        &mut window.renderer,
+                        &mut window.renderer.borrow_mut(),
                         window.state.viewport().logical_size(),
                     );
                 }
@@ -1110,7 +1117,7 @@ where
                 if let Some(window) = self.window_manager.get_mut(*iced_id) {
                     let measured = self.user_interfaces.measure(
                         *iced_id,
-                        &mut window.renderer,
+                        &mut window.renderer.borrow_mut(),
                         Size::new(max.0 as f32, max.1 as f32),
                     );
                     let new_size = clamp_popup_size(measured, min, max);
@@ -1291,9 +1298,12 @@ pub(crate) fn run_action<P, C, E: Executor>(
 
                 // TODO: Shared image cache in compositor
                 if let Some((_id, window)) = window_manager.iter_mut().next() {
-                    window.renderer.allocate_image(&handle, move |allocation| {
-                        let _ = sender.send(allocation);
-                    });
+                    window
+                        .renderer
+                        .borrow_mut()
+                        .allocate_image(&handle, move |allocation| {
+                            let _ = sender.send(allocation);
+                        });
                 }
             }
         },
@@ -1313,7 +1323,7 @@ pub(crate) fn run_action<P, C, E: Executor>(
                 // a window id associated with it, this is the best we can do for now
                 for (id, window) in window_manager.iter_mut() {
                     if let Some(mut ui) = user_interfaces.ui_mut(&id) {
-                        ui.operate(&window.renderer, operation.as_mut());
+                        ui.operate(&window.renderer.borrow(), operation.as_mut());
                     }
                 }
 
@@ -1350,7 +1360,7 @@ pub(crate) fn run_action<P, C, E: Executor>(
                     break 'out;
                 };
                 let bytes = compositor.screenshot(
-                    &mut window.renderer,
+                    &mut window.renderer.borrow_mut(),
                     window.state.viewport(),
                     window.state.background_color(),
                 );
@@ -1416,7 +1426,7 @@ pub(crate) fn run_action<P, C, E: Executor>(
                     user_interfaces.build(
                         iced_id,
                         cache,
-                        &mut window.renderer,
+                        &mut window.renderer.borrow_mut(),
                         window.state.viewport().logical_size(),
                     );
                 }
