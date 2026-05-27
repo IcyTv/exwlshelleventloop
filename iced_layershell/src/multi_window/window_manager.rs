@@ -98,6 +98,15 @@ where
         let layerid = window.id();
         let state = State::new(id, application, size, fractal_scale, &window, system_theme);
         let physical_size = state.viewport().physical_size();
+        tracing::debug!(
+            ?id,
+            ?layerid,
+            logical_size = ?size,
+            physical_width = physical_size.width,
+            physical_height = physical_size.height,
+            scale = fractal_scale,
+            "creating layer-shell window renderer"
+        );
         let surface = compositor.create_surface(window, physical_size.width, physical_size.height);
         let renderer = compositor.create_renderer(renderer_settings);
         let _ = self.aliases.insert(layerid, id);

@@ -456,6 +456,14 @@ where
         };
         let (width, height) = layer_shell_window.get_size();
         let scale_float = layer_shell_window.scale_float();
+        tracing::debug!(
+            layer_id = ?layer_shell_window.id(),
+            width,
+            height,
+            scale = scale_float,
+            known_window = ?self.window_manager.get_alias(layer_shell_window.id()).map(|(id, _)| id),
+            "handle_refresh_event"
+        );
         if width == 0 || height == 0 {
             ev.request_refresh(layer_shell_window.id(), RefreshRequest::NextFrame);
             return;
@@ -466,6 +474,7 @@ where
         let (iced_id, window) = if let Some((iced_id, window)) =
             self.window_manager.get_mut_alias(layer_shell_window.id())
         {
+            tracing::debug!(?iced_id, layer_id = ?layer_shell_window.id(), "reusing existing window renderer");
             let window_size = window.state.window_size();
 
             if window_size.width != width
@@ -489,6 +498,7 @@ where
                 .get_binding()
                 .copied()
                 .unwrap_or_else(IcedId::unique);
+            tracing::debug!(?iced_id, layer_id = ?layer_shell_window.id(), "creating new window during refresh");
 
             let is_first = self.window_manager.is_empty();
 
@@ -579,6 +589,7 @@ where
             );
 
             if physical_size.width > 0 && physical_size.height > 0 {
+                tracing::debug!(?iced_id, width = physical_size.width, height = physical_size.height, "configuring surface");
                 compositor.configure_surface(
                     &mut window.surface,
                     physical_size.width,
@@ -623,6 +634,7 @@ where
         }
 
         let present_span = iced_debug::present(iced_id);
+        tracing::debug!(?iced_id, width = physical_size.width, height = physical_size.height, "presenting surface");
         match compositor.present(
             &mut window.renderer,
             &mut window.surface,
@@ -640,6 +652,7 @@ where
                     panic!("{error:?}");
                 }
                 compositor::SurfaceError::Outdated | compositor::SurfaceError::Lost => {
+                    tracing::warn!(?iced_id, ?error, width = physical_size.width, height = physical_size.height, "surface present failed; recreating/configuring");
                     present_span.finish();
 
                     if error == compositor::SurfaceError::Lost {
@@ -664,7 +677,7 @@ where
                 _ => {
                     present_span.finish();
 
-                    tracing::error!("Error {error:?} when presenting surface.");
+                    tracing::error!(?iced_id, ?error, "error when presenting surface");
                 }
             },
         }
