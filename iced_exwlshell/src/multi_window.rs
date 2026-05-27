@@ -890,11 +890,12 @@ where
                 let size = match size {
                     PopupSize::Fixed(width, height) => (width, height),
                     PopupSize::FitContent { min, max } => {
-                        if let Some(compositor) = self.compositor.as_ref() {
-                            let mut renderer = compositor.create_renderer(self.renderer_settings);
+                        if let Some((_, window)) =
+                            self.window_manager.get_mut_alias(parent_layer_shell_id)
+                        {
                             let measured = self.user_interfaces.measure(
                                 iced_id,
-                                &mut renderer,
+                                &mut window.renderer,
                                 Size::new(max.0 as f32, max.1 as f32),
                             );
 
