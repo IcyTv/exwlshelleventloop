@@ -471,7 +471,7 @@ where
         // events may not be handled after RequestRefreshWithWrapper in the same
         // interaction, we dispatched them immediately.
         let mut events = Vec::new();
-        let (iced_id, window) = if let Some((iced_id, window)) =
+        let (iced_id, window, is_new_window) = if let Some((iced_id, window)) =
             self.window_manager.get_mut_alias(layer_shell_window.id())
         {
             tracing::debug!(?iced_id, layer_id = ?layer_shell_window.id(), "reusing existing window renderer");
@@ -494,7 +494,7 @@ where
                     window.state.window_size_f32(),
                 )));
             }
-            (iced_id, window)
+            (iced_id, window, false)
         } else {
             let wrapper = Arc::new(layer_shell_window.gen_wrapper());
             let iced_id = layer_shell_window
@@ -544,7 +544,7 @@ where
                 size: window.state.window_size_f32(),
                 scale_factor: window.state.viewport().scale_factor(),
             }));
-            (iced_id, window)
+            (iced_id, window, true)
         };
 
         if let Some(output_info) = layer_shell_window.get_xdgoutput_info()
@@ -637,6 +637,12 @@ where
         window.draw_preedit();
 
         if physical_size.width == 0 || physical_size.height == 0 {
+            return;
+        }
+
+        if is_new_window {
+            tracing::debug!(?iced_id, "skipping first present for new window");
+            ev.request_refresh(window.id, RefreshRequest::NextFrame);
             return;
         }
 

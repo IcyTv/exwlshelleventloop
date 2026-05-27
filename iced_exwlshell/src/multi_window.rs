@@ -455,7 +455,7 @@ where
         // events may not be handled after RequestRefreshWithWrapper in the same
         // interaction, we dispatched them immediately.
         let mut events = Vec::new();
-        let (iced_id, window) = if let Some((iced_id, window)) =
+        let (iced_id, window, is_new_window) = if let Some((iced_id, window)) =
             self.window_manager.get_mut_alias(ex_wlshell_window.id())
         {
             let window_size = window.state.window_size();
@@ -474,7 +474,7 @@ where
                     window.state.window_size_f32(),
                 )));
             }
-            (iced_id, window)
+            (iced_id, window, false)
         } else {
             let wrapper = Arc::new(ex_wlshell_window.gen_wrapper());
             let iced_id = ex_wlshell_window
@@ -544,7 +544,7 @@ where
                 position: None,
                 size: window.state.window_size_f32(),
             }));
-            (iced_id, window)
+            (iced_id, window, true)
         };
 
         let compositor = self
@@ -630,6 +630,11 @@ where
         window.draw_preedit();
 
         if physical_size.width == 0 || physical_size.height == 0 {
+            return;
+        }
+
+        if is_new_window {
+            ev.request_refresh(window.id, RefreshRequest::NextFrame);
             return;
         }
 
