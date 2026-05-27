@@ -456,6 +456,10 @@ where
         };
         let (width, height) = layer_shell_window.get_size();
         let scale_float = layer_shell_window.scale_float();
+        if width == 0 || height == 0 {
+            ev.request_refresh(layer_shell_window.id(), RefreshRequest::NextFrame);
+            return;
+        }
         // events may not be handled after RequestRefreshWithWrapper in the same
         // interaction, we dispatched them immediately.
         let mut events = Vec::new();

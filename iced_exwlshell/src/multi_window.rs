@@ -448,6 +448,10 @@ where
         };
         let (width, height) = ex_wlshell_window.get_size();
         let scale_float = ex_wlshell_window.scale_float();
+        if width == 0 || height == 0 {
+            ev.request_refresh(ex_wlshell_window.id(), RefreshRequest::NextFrame);
+            return;
+        }
         // events may not be handled after RequestRefreshWithWrapper in the same
         // interaction, we dispatched them immediately.
         let mut events = Vec::new();
