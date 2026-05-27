@@ -72,16 +72,16 @@ rwh_05 = { package = "raw-window-handle", version = "0.5.2", features = [
 ] }
 rwh_06 = { package = "raw-window-handle", version = "0.6", features = ["std"] }
 sctk = { package = "smithay-client-toolkit", version = "0.20.0" }
-iced = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_runtime = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_core = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_program = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_renderer = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_futures = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_graphics = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_debug = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_devtools = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
-iced_widget = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "55be6c8072473960fd9c97e7ba48cb736db24731" }
+iced = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_runtime = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_core = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_program = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_renderer = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_futures = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_graphics = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_debug = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_devtools = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
+iced_widget = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "3387a6e29a090e67eceef9d959aa5ce12090f7f3" }
 window_clipboard = "0.5.0"
 
 log = "0.4"
