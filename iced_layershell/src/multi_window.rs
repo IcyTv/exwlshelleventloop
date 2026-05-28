@@ -80,6 +80,32 @@ fn clamp_popup_size(size: Size, min: (u32, u32), max: (u32, u32)) -> (u32, u32) 
     (width, height)
 }
 
+fn scale_popup_size((width, height): (u32, u32), scale: f32) -> (u32, u32) {
+    (
+        (width as f32 * scale).round() as u32,
+        (height as f32 * scale).round() as u32,
+    )
+}
+
+fn scale_popup_offset((x, y): (i32, i32), scale: f32) -> (i32, i32) {
+    (
+        (x as f32 * scale).round() as i32,
+        (y as f32 * scale).round() as i32,
+    )
+}
+
+fn scale_popup_rect(
+    (x, y, width, height): (i32, i32, i32, i32),
+    scale: f32,
+) -> (i32, i32, i32, i32) {
+    (
+        (x as f32 * scale).round() as i32,
+        (y as f32 * scale).round() as i32,
+        (width as f32 * scale).round() as i32,
+        (height as f32 * scale).round() as i32,
+    )
+}
+
 // a dispatch loop, another is listen loop
 pub fn run<P>(
     program: P,
@@ -314,7 +340,16 @@ where
     messages: Vec<P::Message>,
     proxy: IcedProxy<Action<P::Message>>,
     time: Instant,
-    tracked_popups: HashMap<IcedId, (IcedNewPopupSettings, layershellev::id::Id, (u32, u32))>,
+    tracked_popups: HashMap<
+        IcedId,
+        (
+            IcedNewPopupSettings,
+            layershellev::id::Id,
+            (u32, u32),
+            f32,
+            f32,
+        ),
+    >,
 }
 
 impl<P, E, C> Context<P, E, C>
@@ -602,7 +637,12 @@ where
             );
 
             if physical_size.width > 0 && physical_size.height > 0 {
-                tracing::debug!(?iced_id, width = physical_size.width, height = physical_size.height, "configuring surface");
+                tracing::debug!(
+                    ?iced_id,
+                    width = physical_size.width,
+                    height = physical_size.height,
+                    "configuring surface"
+                );
                 compositor.configure_surface(
                     &mut window.surface,
                     physical_size.width,
@@ -653,7 +693,12 @@ where
         }
 
         let present_span = iced_debug::present(iced_id);
-        tracing::debug!(?iced_id, width = physical_size.width, height = physical_size.height, "presenting surface");
+        tracing::debug!(
+            ?iced_id,
+            width = physical_size.width,
+            height = physical_size.height,
+            "presenting surface"
+        );
         match compositor.present(
             &mut window.renderer.borrow_mut(),
             &mut window.surface,
@@ -671,7 +716,13 @@ where
                     panic!("{error:?}");
                 }
                 compositor::SurfaceError::Outdated | compositor::SurfaceError::Lost => {
-                    tracing::warn!(?iced_id, ?error, width = physical_size.width, height = physical_size.height, "surface present failed; recreating/configuring");
+                    tracing::warn!(
+                        ?iced_id,
+                        ?error,
+                        width = physical_size.width,
+                        height = physical_size.height,
+                        "surface present failed; recreating/configuring"
+                    );
                     present_span.finish();
 
                     if error == compositor::SurfaceError::Lost {
@@ -928,8 +979,16 @@ where
                 let Some(parent_layer_shell_id) = ev.current_surface_id() else {
                     return;
                 };
+                let parent_app_scale = self
+                    .window_manager
+                    .get_alias(parent_layer_shell_id)
+                    .map(|(_, window)| window.state.application_scale_factor() as f32)
+                    .unwrap_or(1.0);
+                let popup_app_scale = self.user_interfaces.application().scale_factor(iced_id);
                 let size = match size {
-                    PopupSize::Fixed(width, height) => (width, height),
+                    PopupSize::Fixed(width, height) => {
+                        scale_popup_size((width, height), popup_app_scale)
+                    }
                     PopupSize::FitContent { min, max } => {
                         if let Some((_, window)) =
                             self.window_manager.get_mut_alias(parent_layer_shell_id)
@@ -940,24 +999,33 @@ where
                                 Size::new(max.0 as f32, max.1 as f32),
                             );
 
-                            clamp_popup_size(measured, min, max)
+                            scale_popup_size(clamp_popup_size(measured, min, max), popup_app_scale)
                         } else {
-                            min
+                            scale_popup_size(min, popup_app_scale)
                         }
                     }
                 };
                 let (anchor, gravity) = positioner_placement(placement);
                 let popup_settings = NewPopUpSettings {
                     size,
-                    position: offset,
-                    anchor_rect,
+                    position: scale_popup_offset(offset, parent_app_scale),
+                    anchor_rect: scale_popup_rect(anchor_rect, parent_app_scale),
                     anchor,
                     gravity,
                     constraint_adjustment,
                     id: parent_layer_shell_id,
                 };
                 let layer_shell_id = layershellev::id::Id::unique();
-                self.tracked_popups.insert(iced_id, (menusettings, layer_shell_id, size));
+                self.tracked_popups.insert(
+                    iced_id,
+                    (
+                        menusettings,
+                        layer_shell_id,
+                        size,
+                        parent_app_scale,
+                        popup_app_scale,
+                    ),
+                );
                 ev.append_return_data(ReturnData::NewPopUp((
                     popup_settings,
                     layer_shell_id,
@@ -1124,7 +1192,9 @@ where
             }
         }
 
-        for (iced_id, (settings, popup_id, last_size)) in self.tracked_popups.iter_mut() {
+        for (iced_id, (settings, popup_id, last_size, parent_app_scale, popup_app_scale)) in
+            self.tracked_popups.iter_mut()
+        {
             if let PopupSize::FitContent { min, max } = settings.size {
                 if let Some(window) = self.window_manager.get_mut(*iced_id) {
                     let measured = self.user_interfaces.measure(
@@ -1132,20 +1202,24 @@ where
                         &mut window.renderer.borrow_mut(),
                         Size::new(max.0 as f32, max.1 as f32),
                     );
-                    let new_size = clamp_popup_size(measured, min, max);
+                    let new_size =
+                        scale_popup_size(clamp_popup_size(measured, min, max), *popup_app_scale);
                     if new_size != *last_size {
                         *last_size = new_size;
                         let (anchor, gravity) = positioner_placement(settings.placement);
                         let popup_settings = NewPopUpSettings {
                             size: new_size,
-                            position: settings.offset,
-                            anchor_rect: settings.anchor_rect,
+                            position: scale_popup_offset(settings.offset, *parent_app_scale),
+                            anchor_rect: scale_popup_rect(settings.anchor_rect, *parent_app_scale),
                             anchor,
                             gravity,
                             constraint_adjustment: settings.constraint_adjustment,
                             id: *popup_id,
                         };
-                        ev.append_return_data(ReturnData::RepositionPopUp((popup_settings, *popup_id)));
+                        ev.append_return_data(ReturnData::RepositionPopUp((
+                            popup_settings,
+                            *popup_id,
+                        )));
                     }
                 }
             }
