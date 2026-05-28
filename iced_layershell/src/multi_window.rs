@@ -550,7 +550,13 @@ where
         if let Some(output_info) = layer_shell_window.get_xdgoutput_info()
             && !output_info.name().is_empty()
         {
-            crate::window::set_output_name(iced_id, output_info.name());
+            crate::window::set_output_info(
+                iced_id,
+                output_info.name(),
+                output_info.description(),
+                output_info.get_logical_size(),
+                output_info.get_position(),
+            );
         }
 
         let compositor = self
@@ -709,7 +715,7 @@ where
         };
         self.cached_layer_dimensions.remove(&iced_id);
         self.tracked_popups.remove(&iced_id);
-        crate::window::remove_output_name(iced_id);
+        crate::window::remove_output_info(iced_id);
         self.window_manager.remove(iced_id);
         self.user_interfaces.remove(&iced_id);
         self.runtime
