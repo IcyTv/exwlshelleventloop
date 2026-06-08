@@ -75,6 +75,9 @@ pub enum ExWlShellEvent<'a, T, Message> {
 /// Define the output for new layershell
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum OutputOption {
+    /// Let the compositor choose the active output by passing no output to the layer-shell request.
+    Active,
+
     LastOutput,
 
     OutputName(String),
