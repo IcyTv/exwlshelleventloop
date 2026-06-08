@@ -1421,6 +1421,10 @@ pub(crate) fn run_action<P, C, E: Executor>(
                     }
                 }
             }
+
+            for (_, window) in window_manager.iter_mut() {
+                ev.request_refresh(window.id, RefreshRequest::NextFrame);
+            }
         }
         Action::Window(action) => match action {
             WindowAction::Close(id) => {
