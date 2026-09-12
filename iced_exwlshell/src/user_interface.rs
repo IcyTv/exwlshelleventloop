@@ -50,6 +50,14 @@ where
         self.ui = Some(ui);
     }
 
+    pub fn min_size(&self) -> Size {
+        if let Some(ui) = &self.ui {
+            ui.size()
+        } else {
+            Size::ZERO
+        }
+    }
+
     pub fn relayout(mut self, bounds: Size, renderer: &mut Renderer) -> Self {
         let ui = self.take().relayout(bounds, renderer);
         self.ui = Some(ui);

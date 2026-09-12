@@ -1107,6 +1107,7 @@ pub struct WindowState<T> {
     finger_locations: HashMap<i32, (f64, f64)>,
     enter_serial: Option<u32>,
     button_serial: Option<u32>,
+    last_button_serial: Option<u32>,
 
     start_mode: StartMode,
     init_finished: bool,
@@ -1129,7 +1130,7 @@ impl<T: 'static> WindowState<T> {
 
     /// Take the serial to use for the next popup grab, consuming it.
     pub fn take_popup_grab_serial(&mut self) -> Option<u32> {
-        self.button_serial.take()
+        self.button_serial.take().or(self.last_button_serial)
     }
 
     /// Compute the minimum dispatch timeout across all window units.
@@ -1668,6 +1669,7 @@ impl<T> Default for WindowState<T> {
             finger_locations: HashMap::new(),
             enter_serial: None,
             button_serial: None,
+            last_button_serial: None,
 
             start_mode: StartMode::Active,
             init_finished: false,
@@ -3248,6 +3250,7 @@ impl<T: 'static> WindowState<T> {
                             targetid,
                             info,
                         )) => {
+                            window_state.units.retain(|unit| !matches!(unit.shell, Shell::PopUp(_)));
                             let Some(index) =
                                 window_state.units.iter().position(|unit| unit.id == id)
                             else {
@@ -3292,39 +3295,13 @@ impl<T: 'static> WindowState<T> {
                             };
                             positioner.destroy();
 
-                            let is_xdg_toplevel_root = {
-                                let mut current_idx = Some(index);
-                                let mut root_is_toplevel = false;
-                                while let Some(idx) = current_idx {
-                                    match &window_state.units[idx].shell {
-                                        Shell::XdgTopLevel(_) => {
-                                            root_is_toplevel = true;
-                                            break;
-                                        }
-                                        _ => {
-                                            current_idx = window_state.units[idx].parent.and_then(
-                                                |parent_id| {
-                                                    window_state
-                                                        .units
-                                                        .iter()
-                                                        .position(|u| u.id == parent_id)
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                root_is_toplevel
-                            };
-
-                            if is_xdg_toplevel_root {
-                                match (window_state.seat_back.as_ref(), grab_serial) {
-                                    (Some(seat), Some(serial)) => popup.grab(seat, serial),
-                                    (None, Some(_)) => log::warn!(
-                                        target: "exwlshellev",
-                                        "popup {targetid:?} wants a grab but no seat is available; it will not dismiss on click-outside"
-                                    ),
-                                    (_, None) => {}
-                                }
+                            match (window_state.seat_back.as_ref(), grab_serial) {
+                                (Some(seat), Some(serial)) => popup.grab(seat, serial),
+                                (None, Some(_)) => log::warn!(
+                                    target: "exwlshellev",
+                                    "popup {targetid:?} wants a grab but no seat is available; it will not dismiss on click-outside"
+                                ),
+                                (_, None) => {}
                             }
 
                             let mut fractional_scale = None;
@@ -3829,17 +3806,35 @@ fn build_positioner<T: 'static>(
     let (width, height) = size.to_set_i32();
     positioner.set_size(width, height);
     match placement {
-        PopupPlacement::Position((px, py)) => positioner.set_anchor_rect(px, py, 1, 1),
+        PopupPlacement::Position((px, py)) => {
+            positioner.set_anchor_rect(px, py, 1, 1);
+            positioner.set_anchor(anchor);
+            positioner.set_gravity(gravity);
+        }
         PopupPlacement::Anchored {
             position: (arx, ary),
             size: rect,
         } => {
             let (arw, arh) = rect.to_set_i32();
-            positioner.set_anchor_rect(arx, ary, arw, arh)
+            if anchor == xdg_positioner::Anchor::Bottom && gravity == xdg_positioner::Gravity::Bottom {
+                let center_x = arx + arw / 2;
+                let real_anchor_x = center_x - width / 2;
+                positioner.set_anchor_rect(real_anchor_x, ary, width, arh);
+                positioner.set_anchor(xdg_positioner::Anchor::BottomLeft);
+                positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
+            } else if anchor == xdg_positioner::Anchor::Top && gravity == xdg_positioner::Gravity::Top {
+                let center_x = arx + arw / 2;
+                let real_anchor_x = center_x - width / 2;
+                positioner.set_anchor_rect(real_anchor_x, ary, width, arh);
+                positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
+                positioner.set_gravity(xdg_positioner::Gravity::TopRight);
+            } else {
+                positioner.set_anchor_rect(arx, ary, arw, arh);
+                positioner.set_anchor(anchor);
+                positioner.set_gravity(gravity);
+            }
         }
     }
-    positioner.set_anchor(anchor);
-    positioner.set_gravity(gravity);
     positioner.set_constraint_adjustment(constraint_adjustment);
     if positioner.version() >= 3 {
         positioner.set_reactive();
