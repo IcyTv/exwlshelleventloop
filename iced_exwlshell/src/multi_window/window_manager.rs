@@ -31,6 +31,7 @@ where
     pub surface: C::Surface,
     pub state: State<P>,
     pub mouse_interaction: mouse::Interaction,
+    pub popup_settings: Option<crate::actions::IcedNewPopupSettings>,
     preedit: Option<Preedit<P::Renderer>>,
     ime_state: Option<(iced_core::Rectangle, input_method::Purpose)>,
 }
@@ -129,6 +130,7 @@ where
                 surface,
                 state,
                 mouse_interaction: mouse::Interaction::Idle,
+                popup_settings: None,
                 preedit: None,
                 ime_state: None,
             },

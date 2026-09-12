@@ -17,8 +17,8 @@ use crate::{
     settings::Settings,
 };
 use exwlshellev::{
-    DisplayWrapper, ExWlShellEvent, NewPopUpSettings, PopUpRepositionSettings, PopupPlacement,
-    RefreshRequest, ReturnData, WindowState, WindowWrapper,
+    DisplayWrapper, ExWlShellEvent, NewPopUpSettings, PixelSize, PopUpRepositionSettings,
+    PopupPlacement, RefreshRequest, ReturnData, WindowState, WindowWrapper,
     id::Id as LayerShellId,
     reexport::{
         wayland_client::{WlCompositor, WlRegion},
@@ -309,6 +309,7 @@ where
     clipboard: ExwlShellClipboard,
     wl_input_region: Option<WlRegion>,
     user_interfaces: UserInterfaces<P>,
+    pending_popup_settings: HashMap<IcedId, IcedNewPopupSettings>,
     waiting_layer_shell_actions: Vec<(Option<IcedId>, ExwlShellCustomAction)>,
     iced_events: Vec<(IcedId, IcedEvent)>,
     messages: Vec<P::Message>,
@@ -355,6 +356,7 @@ where
             clipboard: ExwlShellClipboard::unconnected(),
             wl_input_region: Default::default(),
             user_interfaces: UserInterfaces::new(application),
+            pending_popup_settings: HashMap::new(),
             waiting_layer_shell_actions: Default::default(),
             iced_events: Default::default(),
             messages: Default::default(),
@@ -591,12 +593,59 @@ where
                         .broadcast(iced_futures::subscription::Event::SystemThemeChanged(theme));
                 }
 
+                window.popup_settings = self.pending_popup_settings.remove(&iced_id);
+
+                let build_size = if shell_type == shell::ShellType::PopUp {
+                    Size::new(4096.0, 4096.0)
+                } else {
+                    window.state.viewport().logical_size()
+                };
+
                 self.user_interfaces.build(
                     iced_id,
                     user_interface::Cache::default(),
                     &mut window.renderer.borrow_mut(),
-                    window.state.viewport().logical_size(),
+                    build_size,
                 );
+
+                if shell_type == shell::ShellType::PopUp {
+                    if let Some(ui) = self.user_interfaces.ui_mut(&iced_id) {
+                        let min_size = ui.min_size();
+                        let target_w = min_size.width.ceil() as u32;
+                        let target_h = min_size.height.ceil() as u32;
+                        if target_w > 0 && target_h > 0 && (target_w != width || target_h != height) {
+                            window.state.update_view_port(target_w, target_h, scale_float);
+                            ui.relayout(
+                                window.state.viewport().logical_size(),
+                                &mut window.renderer.borrow_mut(),
+                            );
+                            if let Some(popup_settings) = window.popup_settings {
+                                let new_settings = IcedNewPopupSettings {
+                                    size: PixelSize::px(target_w, target_h),
+                                    ..popup_settings
+                                };
+                                let IcedNewPopupSettings {
+                                    size,
+                                    placement,
+                                    anchor,
+                                    gravity,
+                                    constraint_adjustment,
+                                    ..
+                                } = new_settings;
+                                ev.append_return_data(ReturnData::PopUpReposition((
+                                    PopUpRepositionSettings {
+                                        size,
+                                        placement,
+                                        anchor,
+                                        gravity,
+                                        constraint_adjustment,
+                                    },
+                                    unit_id,
+                                )));
+                            }
+                        }
+                    }
+                }
 
                 events.push(IcedEvent::Window(IcedWindowEvent::Opened {
                     position: None,
@@ -1023,6 +1072,7 @@ where
                     gravity,
                     constraint_adjustment,
                 } = settings;
+                self.pending_popup_settings.insert(iced_id, settings.clone());
                 let parent_layer_id = match parent {
                     Some(parent) => self.window_manager.get(parent).map(|w| w.id),
                     None => ev.popup_parent_id(),
