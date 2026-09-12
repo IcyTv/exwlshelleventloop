@@ -1129,7 +1129,7 @@ impl<T: 'static> WindowState<T> {
 
     /// Take the serial to use for the next popup grab, consuming it.
     pub fn take_popup_grab_serial(&mut self) -> Option<u32> {
-        self.button_serial.take().or(self.enter_serial)
+        self.button_serial.take()
     }
 
     /// Compute the minimum dispatch timeout across all window units.
@@ -3292,13 +3292,15 @@ impl<T: 'static> WindowState<T> {
                             };
                             positioner.destroy();
 
-                            match (window_state.seat_back.as_ref(), grab_serial) {
-                                (Some(seat), Some(serial)) => popup.grab(seat, serial),
-                                (None, Some(_)) => log::warn!(
-                                    target: "exwlshellev",
-                                    "popup {targetid:?} wants a grab but no seat is available; it will not dismiss on click-outside"
-                                ),
-                                (_, None) => {}
+                            if matches!(window_state.units[index].shell, Shell::PopUp(_)) {
+                                match (window_state.seat_back.as_ref(), grab_serial) {
+                                    (Some(seat), Some(serial)) => popup.grab(seat, serial),
+                                    (None, Some(_)) => log::warn!(
+                                        target: "exwlshellev",
+                                        "popup {targetid:?} wants a grab but no seat is available; it will not dismiss on click-outside"
+                                    ),
+                                    (_, None) => {}
+                                }
                             }
 
                             let mut fractional_scale = None;
