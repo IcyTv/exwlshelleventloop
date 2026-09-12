@@ -72,6 +72,7 @@ fn present_recovery(error: &compositor::SurfaceError) -> PresentRecovery {
         compositor::SurfaceError::Timeout | compositor::SurfaceError::Other => {
             PresentRecovery::Report
         }
+        compositor::SurfaceError::Occluded => PresentRecovery::Report,
         compositor::SurfaceError::OutOfMemory => PresentRecovery::Fatal,
     }
 }
@@ -81,7 +82,6 @@ pub fn run<P>(
     program: P,
     namespace: &str,
     settings: Settings,
-    compositor_settings: iced_graphics::Settings,
     lock: bool,
     on_new_shell: Option<crate::NewShellHook<P::Message>>,
     redraw_policy: Policy<P::Message>,
@@ -91,6 +91,16 @@ where
     P::Theme: DefaultStyle,
     P::Message: 'static + TryInto<ExwlShellCustomActionWithId, Error = P::Message>,
 {
+    let compositor_settings = iced_core::backend::Settings {
+        antialiasing: settings.antialiasing,
+        ..Default::default()
+    };
+    let renderer_settings = iced_core::renderer::Settings {
+        font: settings.default_font,
+        text_size: settings.default_text_size,
+        ..Default::default()
+    };
+
     use exwlshellev::calloop::channel::channel;
     let (message_sender, message_receiver) = channel::<Action<P::Message>>();
 
@@ -177,6 +187,7 @@ where
     >::new(
         application,
         compositor_settings,
+        renderer_settings,
         runtime,
         on_new_shell,
         settings.shell_broadcast,
@@ -285,7 +296,8 @@ where
     P::Theme: DefaultStyle,
     P::Message: 'static,
 {
-    compositor_settings: iced_graphics::Settings,
+    compositor_settings: iced_core::backend::Settings,
+    renderer_settings: iced_core::renderer::Settings,
     runtime: MultiRuntime<E, P::Message>,
     on_new_shell: Option<crate::NewShellHook<P::Message>>,
     shell_broadcast: shell::ShellSender,
@@ -317,7 +329,8 @@ where
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         application: Instance<P>,
-        compositor_settings: iced_graphics::Settings,
+        compositor_settings: iced_core::backend::Settings,
+        renderer_settings: iced_core::renderer::Settings,
         runtime: MultiRuntime<E, P::Message>,
         on_new_shell: Option<crate::NewShellHook<P::Message>>,
         shell_broadcast: shell::ShellSender,
@@ -331,6 +344,7 @@ where
             on_new_shell,
             shell_broadcast,
             compositor_settings,
+            renderer_settings,
             runtime,
             system_theme,
             fonts,
@@ -362,7 +376,12 @@ where
     /// before the first frame can render. Copies iced_winit logic.
     fn create_compositor(&mut self, window: Arc<WindowWrapper>, display: DisplayWrapper) {
         let shell = Shell::new(self.proxy.clone());
-        let compositor_future = C::new(self.compositor_settings, display, window.clone(), shell);
+        let compositor_future = C::new(
+            self.compositor_settings.clone(),
+            display,
+            window.clone(),
+            shell,
+        );
         let mut new_compositor =
             futures::executor::block_on(compositor_future).expect("Cannot create compositor");
         for font in self.fonts.clone() {
@@ -450,10 +469,14 @@ where
         let unit_id = ex_wlshell_window.id();
         let (width, height) = ex_wlshell_window.get_size();
         let scale_float = ex_wlshell_window.scale_float();
+        if width == 0 || height == 0 {
+            ev.request_refresh(unit_id, RefreshRequest::NextFrame);
+            return;
+        }
         // events may not be handled after RequestRefreshWithWrapper in the same
         // interaction, we dispatched them immediately.
         let mut events = Vec::new();
-        let (iced_id, window) =
+        let (iced_id, window, is_new_window) =
             if let Some((iced_id, window)) = self.window_manager.get_mut_alias(unit_id) {
                 let window_size = window.state.window_size();
 
@@ -464,14 +487,14 @@ where
                     let layout_span = iced_debug::layout(iced_id);
                     window.state.update_view_port(width, height, scale_float);
                     if let Some(ui) = self.user_interfaces.ui_mut(&iced_id) {
-                        ui.relayout(window.state.viewport().logical_size(), &mut window.renderer);
+                        ui.relayout(window.state.viewport().logical_size(), &mut window.renderer.borrow_mut());
                     }
                     layout_span.finish();
                     events.push(IcedEvent::Window(IcedWindowEvent::Resized(
                         window.state.window_size_f32(),
                     )));
                 }
-                (iced_id, window)
+                (iced_id, window, false)
             } else {
                 let wrapper = ex_wlshell_window.gen_wrapper();
                 let iced_id = ex_wlshell_window
@@ -514,9 +537,9 @@ where
                         window.state.synchronize(application);
                     }
                     iced_debug::theme_changed(|| {
-                        self.window_manager
-                            .first()
-                            .and_then(|window| theme::Base::palette(window.state.theme()))
+                        self.window_manager.first().and_then(|window| {
+                            <P::Theme as theme::Base>::seed(window.state.theme())
+                        })
                     });
                     for (iced_id, cache) in caches {
                         let Some(window) = self.window_manager.get_mut(iced_id) else {
@@ -525,13 +548,20 @@ where
                         self.user_interfaces.build(
                             iced_id,
                             cache,
-                            &mut window.renderer,
+                            &mut window.renderer.borrow_mut(),
                             window.state.viewport().logical_size(),
                         );
                     }
                 }
 
                 let is_first = self.window_manager.is_empty();
+                let proxy = self.proxy.clone();
+                let waker = iced_core::shell::Waker::new(move || {
+                    proxy.send_action(Action::Event {
+                        window: iced_id,
+                        event: IcedEvent::Waken,
+                    });
+                });
 
                 let window = self.window_manager.insert(
                     iced_id,
@@ -542,12 +572,14 @@ where
                     self.compositor
                         .as_mut()
                         .expect("It should have been created"),
+                    self.renderer_settings,
+                    waker,
                     self.system_theme,
                 );
 
                 iced_debug::theme_changed(|| {
                     if is_first {
-                        theme::Base::palette(window.state.theme())
+                        <P::Theme as theme::Base>::seed(window.state.theme())
                     } else {
                         None
                     }
@@ -562,15 +594,16 @@ where
                 self.user_interfaces.build(
                     iced_id,
                     user_interface::Cache::default(),
-                    &mut window.renderer,
+                    &mut window.renderer.borrow_mut(),
                     window.state.viewport().logical_size(),
                 );
 
                 events.push(IcedEvent::Window(IcedWindowEvent::Opened {
                     position: None,
                     size: window.state.window_size_f32(),
+                    scale_factor: window.state.application_scale_factor() as f32,
                 }));
-                (iced_id, window)
+                (iced_id, window, true)
             };
 
         let compositor = self
@@ -595,11 +628,18 @@ where
 
         let draw_span = iced_debug::draw(iced_id);
         let (ui_state, statuses) = ui.update(
+            window.raw.as_ref(),
+            &window.waker,
             &events,
             cursor,
-            &mut window.renderer,
-            &mut self.clipboard,
+            &mut window.renderer.borrow_mut(),
             &mut self.messages,
+        );
+        run_clipboard(
+            &mut self.clipboard,
+            &ui_state,
+            iced_id,
+            &mut self.iced_events,
         );
 
         let physical_size = window.state.viewport().physical_size();
@@ -616,11 +656,13 @@ where
                 (physical_size, window.state.viewport().scale_factor()),
             );
 
-            compositor.configure_surface(
-                &mut window.surface,
-                physical_size.width,
-                physical_size.height,
-            );
+            if physical_size.width > 0 && physical_size.height > 0 {
+                compositor.configure_surface(
+                    &mut window.surface,
+                    physical_size.width,
+                    physical_size.height,
+                );
+            }
         }
 
         for (idx, event) in events.into_iter().enumerate() {
@@ -637,7 +679,7 @@ where
         }
 
         ui.draw(
-            &mut window.renderer,
+            &mut window.renderer.borrow_mut(),
             window.state.theme(),
             &iced_core::renderer::Style {
                 text_color: window.state.text_color(),
@@ -653,9 +695,20 @@ where
 
         window.draw_preedit();
 
+        if physical_size.width == 0 || physical_size.height == 0 {
+            return;
+        }
+
+        if is_new_window {
+            tracing::debug!(?iced_id, "skipping first present for new window");
+            ev.request_refresh(layer_shell_id, RefreshRequest::NextFrame);
+            return;
+        }
+
         let present_span = iced_debug::present(iced_id);
+        tracing::debug!(?iced_id, width = physical_size.width, height = physical_size.height, "presenting surface");
         match compositor.present(
-            &mut window.renderer,
+            &mut window.renderer.borrow_mut(),
             &mut window.surface,
             window.state.viewport(),
             window.state.background_color(),
@@ -806,12 +859,14 @@ where
             &mut self.compositor,
             action,
             &mut self.messages,
+            &mut self.iced_events,
             &mut self.clipboard,
             &mut self.waiting_layer_shell_actions,
             &mut should_exit,
             &mut self.window_manager,
             &mut self.system_theme,
             &mut self.runtime,
+            &mut self.renderer_settings,
             ev,
         );
         if should_exit {
@@ -1096,12 +1151,19 @@ where
                 .ui_mut(&iced_id)
                 .expect("Get user interface")
                 .update(
+                    window.raw.as_ref(),
+                    &window.waker,
                     &window_events,
                     window.state.cursor(),
-                    &mut window.renderer,
-                    &mut self.clipboard,
+                    &mut window.renderer.borrow_mut(),
                     &mut self.messages,
                 );
+            run_clipboard(
+                &mut self.clipboard,
+                &ui_state,
+                iced_id,
+                &mut self.iced_events,
+            );
 
             #[cfg(feature = "unconditional-rendering")]
             let unconditional_rendering = true;
@@ -1157,7 +1219,7 @@ where
             iced_debug::theme_changed(|| {
                 self.window_manager
                     .first()
-                    .and_then(|window| theme::Base::palette(window.state.theme()))
+                    .and_then(|window| <P::Theme as theme::Base>::seed(window.state.theme()))
             });
 
             for (iced_id, cache) in caches {
@@ -1167,7 +1229,7 @@ where
                 self.user_interfaces.build(
                     iced_id,
                     cache,
-                    &mut window.renderer,
+                    &mut window.renderer.borrow_mut(),
                     window.state.viewport().logical_size(),
                 );
             }
@@ -1177,7 +1239,7 @@ where
                     self.user_interfaces.build(
                         iced_id,
                         cache,
-                        &mut window.renderer,
+                        &mut window.renderer.borrow_mut(),
                         window.state.viewport().logical_size(),
                     );
                 }
@@ -1264,6 +1326,39 @@ where
     }
 }
 
+fn run_clipboard(
+    clipboard: &mut ExwlShellClipboard,
+    state: &user_interface::State,
+    window: IcedId,
+    events: &mut Vec<(IcedId, IcedEvent)>,
+) {
+    let user_interface::State::Updated {
+        clipboard: requests,
+        ..
+    } = state
+    else {
+        return;
+    };
+
+    for kind in &requests.reads {
+        events.push((
+            window,
+            IcedEvent::Clipboard(iced_core::clipboard::Event::Read(
+                clipboard.read(*kind).map(Arc::new),
+            )),
+        ));
+    }
+
+    if let Some(content) = requests.write.clone() {
+        events.push((
+            window,
+            IcedEvent::Clipboard(iced_core::clipboard::Event::Written(
+                clipboard.write(content),
+            )),
+        ));
+    }
+}
+
 pub(crate) fn update<P: IcedProgram, E: Executor>(
     application: &mut Instance<P>,
     runtime: &mut MultiRuntime<E, P::Message>,
@@ -1307,12 +1402,14 @@ pub(crate) fn run_action<P, C, E: Executor>(
     compositor: &mut Option<C>,
     event: Action<P::Message>,
     messages: &mut Vec<P::Message>,
+    iced_events: &mut Vec<(IcedId, IcedEvent)>,
     clipboard: &mut ExwlShellClipboard,
     waiting_layer_shell_actions: &mut Vec<(Option<iced_core::window::Id>, ExwlShellCustomAction)>,
     should_exit: &mut bool,
     window_manager: &mut WindowManager<P, C>,
     system_theme: &mut iced_core::theme::Mode,
     runtime: &mut MultiRuntime<E, P::Message>,
+    renderer_settings: &mut iced_core::renderer::Settings,
     ev: &mut WindowState<IcedId>,
 ) where
     P: IcedProgram + 'static,
@@ -1323,6 +1420,7 @@ pub(crate) fn run_action<P, C, E: Executor>(
     use iced_core::widget::operation;
     use iced_runtime::Action;
     use iced_runtime::clipboard;
+    use iced_runtime::{backend, font};
 
     use iced_runtime::window::Action as WindowAction;
     match event {
@@ -1341,18 +1439,65 @@ pub(crate) fn run_action<P, C, E: Executor>(
 
                 // TODO: Shared image cache in compositor
                 if let Some((_id, window)) = window_manager.iter_mut().next() {
-                    window.renderer.allocate_image(&handle, move |allocation| {
+                    window.renderer.borrow_mut().allocate_image(&handle, move |allocation| {
                         let _ = sender.send(allocation);
                     });
                 }
             }
         },
-        Action::Clipboard(action) => match action {
-            clipboard::Action::Read { target, channel } => {
-                let _ = channel.send(clipboard.read(target));
+        Action::Font(action) => match action {
+            font::Action::Load { bytes, channel } => {
+                if let Some(compositor) = compositor {
+                    let _ = channel.send(compositor.load_font(bytes));
+                }
             }
-            clipboard::Action::Write { target, contents } => {
-                clipboard.write(target, contents);
+            font::Action::List { channel } => {
+                if let Some(compositor) = compositor {
+                    let _ = channel.send(compositor.list_fonts());
+                }
+            }
+            font::Action::SetDefaults { font, text_size } => {
+                renderer_settings.font = font;
+                renderer_settings.text_size = text_size;
+
+                if let Some(compositor) = compositor {
+                    // With shared renderer, create the new renderer once
+                    if let Some((_, first_window)) = window_manager.iter_mut().next() {
+                        *first_window.renderer.borrow_mut() =
+                            compositor.create_renderer(*renderer_settings);
+                    }
+                    for (id, window) in window_manager.iter_mut() {
+                        if let Some(cache) = user_interfaces.remove(&id) {
+                            user_interfaces.build(
+                                id,
+                                cache,
+                                &mut window.renderer.borrow_mut(),
+                                window.state.viewport().logical_size(),
+                            );
+                        }
+                    }
+                }
+            }
+        },
+        Action::Backend(backend::Action::Configure(_, channel)) => {
+            let _ = channel.send(Err(iced_core::backend::Error::BackendError(
+                "runtime backend reconfiguration is not supported".into(),
+            )));
+        }
+        Action::Event { window, event } => iced_events.push((window, event)),
+        Action::Tick => {
+            use iced_core::Renderer as _;
+
+            for (_, window) in window_manager.iter_mut() {
+                window.renderer.borrow_mut().tick();
+            }
+        }
+        Action::Clipboard(action) => match action {
+            clipboard::Action::Read { kind, channel } => {
+                let _ = channel.send(clipboard.read(kind));
+            }
+            clipboard::Action::Write { content, channel } => {
+                let _ = channel.send(clipboard.write(content));
             }
         },
         Action::Widget(action) => {
@@ -1363,7 +1508,7 @@ pub(crate) fn run_action<P, C, E: Executor>(
                 // a window id associated with it, this is the best we can do for now
                 for (id, window) in window_manager.iter_mut() {
                     if let Some(mut ui) = user_interfaces.ui_mut(&id) {
-                        ui.operate(&window.renderer, operation.as_mut());
+                        ui.operate(&window.renderer.borrow(), operation.as_mut());
                     }
                 }
 
@@ -1375,6 +1520,7 @@ pub(crate) fn run_action<P, C, E: Executor>(
                     }
                 }
             }
+            ev.request_refresh_all(RefreshRequest::NextFrame);
         }
         Action::Window(action) => match action {
             WindowAction::Close(id) => {
@@ -1400,7 +1546,7 @@ pub(crate) fn run_action<P, C, E: Executor>(
                     break 'out;
                 };
                 let bytes = compositor.screenshot(
-                    &mut window.renderer,
+                    &mut window.renderer.borrow_mut(),
                     window.state.viewport(),
                     window.state.background_color(),
                 );
@@ -1444,21 +1590,13 @@ pub(crate) fn run_action<P, C, E: Executor>(
         Action::Exit => {
             *should_exit = true;
         }
-        Action::LoadFont { bytes, channel } => {
-            if let Some(compositor) = compositor {
-                // TODO: Error handling (?)
-                compositor.load_font(bytes.clone());
-
-                let _ = channel.send(Ok(()));
-            }
-        }
         Action::Reload => {
             for (iced_id, window) in window_manager.iter_mut() {
                 if let Some(cache) = user_interfaces.remove(&iced_id) {
                     user_interfaces.build(
                         iced_id,
                         cache,
-                        &mut window.renderer,
+                        &mut window.renderer.borrow_mut(),
                         window.state.viewport().logical_size(),
                     );
                 }

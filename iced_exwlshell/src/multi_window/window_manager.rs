@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc, sync::Arc};
 
 use super::state::State;
 use crate::DefaultStyle;
@@ -7,6 +7,8 @@ use enumflags2::{BitFlag, BitFlags};
 use exwlshellev::{WindowWrapper, id::Id as LayerId};
 use iced_core::InputMethod;
 use iced_core::input_method;
+use iced_core::renderer;
+use iced_core::shell;
 use iced_graphics::Compositor;
 
 use iced_core::mouse;
@@ -23,7 +25,9 @@ where
     pub id: LayerId,
     #[allow(unused)]
     pub iced_id: IcedId,
-    pub renderer: P::Renderer,
+    pub renderer: Rc<RefCell<P::Renderer>>,
+    pub raw: Arc<WindowWrapper>,
+    pub waker: shell::Waker,
     pub surface: C::Surface,
     pub state: State<P>,
     pub mouse_interaction: mouse::Interaction,
@@ -39,6 +43,7 @@ where
     aliases: BTreeMap<LayerId, IcedId>,
     back_aliases: BTreeMap<IcedId, LayerId>,
     entries: BTreeMap<IcedId, Window<P, C>>,
+    shared_renderer: Option<Rc<RefCell<P::Renderer>>>,
 }
 
 impl<P, C> Default for WindowManager<P, C>
@@ -63,6 +68,7 @@ where
             aliases: BTreeMap::new(),
             back_aliases: BTreeMap::new(),
             entries: BTreeMap::new(),
+            shared_renderer: None,
         }
     }
 
@@ -71,6 +77,9 @@ where
         self.aliases.retain(|_, aliased| *aliased != id);
         self.back_aliases.remove(&id);
         self.entries.remove(&id);
+        if self.entries.is_empty() {
+            self.shared_renderer = None;
+        }
     }
 
     pub fn first(&self) -> Option<&Window<P, C>> {
@@ -86,13 +95,26 @@ where
         window: Arc<WindowWrapper>,
         application: &Instance<P>,
         compositor: &mut C,
+        renderer_settings: renderer::Settings,
+        waker: shell::Waker,
         system_theme: iced_core::theme::Mode,
     ) -> &mut Window<P, C> {
         let layerid = window.id();
         let state = State::new(id, application, size, fractal_scale, &window, system_theme);
         let physical_size = state.viewport().physical_size();
-        let surface = compositor.create_surface(window, physical_size.width, physical_size.height);
-        let renderer = compositor.create_renderer();
+        tracing::debug!(
+            ?id,
+            ?layerid,
+            physical_width = physical_size.width,
+            physical_height = physical_size.height,
+            scale = fractal_scale,
+            "creating window renderer"
+        );
+        let surface =
+            compositor.create_surface(window.clone(), physical_size.width, physical_size.height);
+        let renderer = self.shared_renderer.get_or_insert_with(|| {
+            Rc::new(RefCell::new(compositor.create_renderer(renderer_settings)))
+        });
         let _ = self.aliases.insert(layerid, id);
         let _ = self.back_aliases.insert(id, layerid);
 
@@ -101,7 +123,9 @@ where
             Window {
                 id: layerid,
                 iced_id: id,
-                renderer,
+                renderer: renderer.clone(),
+                raw: window,
+                waker,
                 surface,
                 state,
                 mouse_interaction: mouse::Interaction::Idle,
@@ -183,7 +207,7 @@ where
                             cursor,
                             &preedit,
                             self.state.background_color(),
-                            &self.renderer,
+                            &self.renderer.borrow(),
                         );
 
                         self.preedit = Some(overlay);
@@ -201,8 +225,9 @@ where
         use iced_core::Point;
         use iced_core::Rectangle;
         if let Some(preedit) = &self.preedit {
+            let mut renderer = self.renderer.borrow_mut();
             preedit.draw(
-                &mut self.renderer,
+                &mut renderer,
                 self.state.text_color(),
                 self.state.background_color(),
                 &Rectangle::new(Point::ORIGIN, self.state.viewport().logical_size()),

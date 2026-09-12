@@ -1,4 +1,3 @@
-use super::attach;
 use super::daemon::{UpdateFn, with_executor, with_style, with_subscription};
 pub use pattern::application;
 mod pattern {
@@ -389,23 +388,10 @@ mod pattern {
             #[cfg(any(not(feature = "debug"), target_arch = "wasm32"))]
             let program = self.raw;
 
-            #[allow(clippy::needless_update)]
-            let renderer_settings = iced_graphics::Settings {
-                default_font: settings.default_font,
-                default_text_size: settings.default_text_size,
-                antialiasing: if settings.antialiasing {
-                    Some(iced_graphics::Antialiasing::MSAAx4)
-                } else {
-                    None
-                },
-                ..iced_graphics::Settings::default()
-            };
-
             crate::multi_window::run(
                 program,
                 &self.namespace,
                 settings,
-                renderer_settings,
                 true,
                 None,
                 Policy::default(),

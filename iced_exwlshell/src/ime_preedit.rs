@@ -10,7 +10,7 @@ where
 {
     position: Point,
     content: Renderer::Paragraph,
-    spans: Vec<text::Span<'static, (), Renderer::Font>>,
+    spans: Vec<text::Span<'static>>,
 }
 
 #[bitflags]
@@ -64,13 +64,15 @@ where
             self.content = Renderer::Paragraph::with_spans(Text {
                 content: &spans,
                 bounds: Size::INFINITE,
-                size: preedit.text_size.unwrap_or_else(|| renderer.default_size()),
+                size: preedit.text_size.unwrap_or_else(|| renderer.text_size()),
                 line_height: text::LineHeight::default(),
-                font: renderer.default_font(),
+                font: renderer.font(),
                 align_x: text::Alignment::Default,
                 align_y: alignment::Vertical::Top,
                 shaping: text::Shaping::Advanced,
                 wrapping: text::Wrapping::None,
+                ellipsis: text::Ellipsis::None,
+                hint_factor: None,
             });
 
             self.spans.clear();

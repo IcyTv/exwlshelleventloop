@@ -687,32 +687,21 @@ impl<P: Program> Daemon<P> {
             (
                 super::attach(self.raw),
                 hook,
-                redraw_policy.for_wrapped_messages(
-                    |event: &iced_exdevtools::Event<P>| match event {
+                redraw_policy.for_wrapped_messages(|event: &iced_exdevtools::Event<P::Message>| {
+                    match event {
                         iced_exdevtools::Event::Program(message) => Some(message),
                         _ => None,
-                    },
-                ),
+                    }
+                }),
             )
         };
 
         #[cfg(any(not(feature = "debug"), target_arch = "wasm32"))]
         let (program, redraw_policy) = (self.raw, redraw_policy);
-        let renderer_settings = iced_graphics::Settings {
-            default_font: settings.default_font,
-            default_text_size: settings.default_text_size,
-            antialiasing: if settings.antialiasing {
-                Some(iced_graphics::Antialiasing::MSAAx4)
-            } else {
-                None
-            },
-            ..Default::default()
-        };
         crate::multi_window::run(
             program,
             &self.namespace,
             settings,
-            renderer_settings,
             false,
             on_new_shell,
             redraw_policy,
