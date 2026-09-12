@@ -58,16 +58,16 @@ calloop-wayland-source = "0.4.1"
 
 rwh_06 = { package = "raw-window-handle", version = "0.6", features = ["std"] }
 sctk = { package = "smithay-client-toolkit", version = "0.21.1" }
-iced = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_runtime = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_core = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_program = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_renderer = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_futures = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_graphics = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_debug = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_devtools = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
-iced_widget = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", rev = "18560b674c24213f09b0908f2e59003f5b002ec7" }
+iced = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_runtime = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_core = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_program = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_renderer = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_futures = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_graphics = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_debug = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_devtools = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
+iced_widget = { version = "0.15.0-dev", git = "https://github.com/IcyTv/iced", branch = "master" }
 window_clipboard = "0.5.1"
 
 log = "0.4"
