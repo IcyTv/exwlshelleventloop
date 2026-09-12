@@ -114,6 +114,42 @@ impl IcedNewPopupSettings {
         self.constraint_adjustment = constraint_adjustment;
         self
     }
+
+    #[must_use]
+    pub fn scale(&self, scale: f64) -> Self {
+        let (sw, sh) = self.size.to_set();
+        let size = PixelSize::px(
+            (f64::from(sw) * scale).round() as u32,
+            (f64::from(sh) * scale).round() as u32,
+        );
+        let placement = match self.placement {
+            PopupPlacement::Position((x, y)) => PopupPlacement::Position((
+                (f64::from(x) * scale).round() as i32,
+                (f64::from(y) * scale).round() as i32,
+            )),
+            PopupPlacement::Anchored {
+                position: (x, y),
+                size: rect,
+            } => {
+                let (rw, rh) = rect.to_set();
+                PopupPlacement::Anchored {
+                    position: (
+                        (f64::from(x) * scale).round() as i32,
+                        (f64::from(y) * scale).round() as i32,
+                    ),
+                    size: PixelSize::px(
+                        (f64::from(rw) * scale).round() as u32,
+                        (f64::from(rh) * scale).round() as u32,
+                    ),
+                }
+            }
+        };
+        Self {
+            size,
+            placement,
+            ..*self
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]

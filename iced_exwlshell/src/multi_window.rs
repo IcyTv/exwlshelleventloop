@@ -611,18 +611,19 @@ where
                 if shell_type == shell::ShellType::PopUp {
                     if let Some(ui) = self.user_interfaces.ui_mut(&iced_id) {
                         let min_size = ui.min_size();
-                        let target_w = min_size.width.ceil() as u32;
-                        let target_h = min_size.height.ceil() as u32;
+                        let app_scale = window.state.application_scale_factor();
+                        let target_w = (min_size.width as f64 * app_scale).ceil() as u32;
+                        let target_h = (min_size.height as f64 * app_scale).ceil() as u32;
                         if target_w > 0 && target_h > 0 && (target_w != width || target_h != height) {
                             window.state.update_view_port(target_w, target_h, scale_float);
                             ui.relayout(
                                 window.state.viewport().logical_size(),
                                 &mut window.renderer.borrow_mut(),
                             );
-                            if let Some(popup_settings) = window.popup_settings {
+                            if let Some(popup_settings) = &window.popup_settings {
                                 let new_settings = IcedNewPopupSettings {
                                     size: PixelSize::px(target_w, target_h),
-                                    ..popup_settings
+                                    ..*popup_settings
                                 };
                                 let IcedNewPopupSettings {
                                     size,
@@ -1064,22 +1065,38 @@ where
                 settings,
                 id: iced_id,
             } => {
-                let IcedNewPopupSettings {
-                    size,
-                    parent,
-                    placement,
-                    anchor,
-                    gravity,
-                    constraint_adjustment,
-                } = settings;
-                self.pending_popup_settings.insert(iced_id, settings.clone());
-                let parent_layer_id = match parent {
+                let parent_layer_id = match settings.parent {
                     Some(parent) => self.window_manager.get(parent).map(|w| w.id),
                     None => ev.popup_parent_id(),
                 };
                 let Some(parent_layer_id) = parent_layer_id else {
                     return;
                 };
+                let parent_scale = match settings.parent {
+                    Some(parent_id) => self
+                        .window_manager
+                        .get(parent_id)
+                        .map(|w| w.state.application_scale_factor()),
+                    None => self
+                        .window_manager
+                        .get_alias(parent_layer_id)
+                        .map(|(_, w)| w.state.application_scale_factor()),
+                }
+                .unwrap_or(1.0);
+
+                let scaled_settings = settings.scale(parent_scale);
+                self.pending_popup_settings
+                    .insert(iced_id, scaled_settings.clone());
+
+                let IcedNewPopupSettings {
+                    size,
+                    placement,
+                    anchor,
+                    gravity,
+                    constraint_adjustment,
+                    ..
+                } = scaled_settings;
+
                 let grab_serial = ev.take_popup_grab_serial();
                 let popup_settings = NewPopUpSettings {
                     size,
@@ -1098,6 +1115,22 @@ where
                 )));
             }
             ExwlShellCustomAction::PopUpReposition { settings } => {
+                let Some(ex_shell_id) = ex_shell_id else {
+                    return;
+                };
+                let parent_scale = match settings.parent {
+                    Some(parent_id) => self
+                        .window_manager
+                        .get(parent_id)
+                        .map(|w| w.state.application_scale_factor()),
+                    None => self
+                        .window_manager
+                        .get_alias(ex_shell_id)
+                        .map(|(_, w)| w.state.application_scale_factor()),
+                }
+                .unwrap_or(1.0);
+
+                let scaled_settings = settings.scale(parent_scale);
                 let IcedNewPopupSettings {
                     size,
                     placement,
@@ -1105,10 +1138,7 @@ where
                     gravity,
                     constraint_adjustment,
                     ..
-                } = settings;
-                let Some(ex_shell_id) = ex_shell_id else {
-                    return;
-                };
+                } = scaled_settings;
                 ev.append_return_data(ReturnData::PopUpReposition((
                     PopUpRepositionSettings {
                         size,
@@ -1135,10 +1165,19 @@ where
                 let Some(point) = window.state.mouse_position() else {
                     return;
                 };
-                let (x, y) = (point.x as i32, point.y as i32);
+                let scale = window.state.application_scale_factor();
+                let (x, y) = (
+                    (point.x as f64 * scale).round() as i32,
+                    (point.y as f64 * scale).round() as i32,
+                );
+                let (mw, mh) = menu_setting.size.to_set();
+                let size = PixelSize::px(
+                    (f64::from(mw) * scale).round() as u32,
+                    (f64::from(mh) * scale).round() as u32,
+                );
 
                 let popup_settings = NewPopUpSettings {
-                    size: menu_setting.size,
+                    size,
                     id: parent_layer_shell_id,
                     placement: PopupPlacement::Position((x, y)),
                     anchor: PopupAnchor::TopLeft,
