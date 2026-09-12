@@ -3806,35 +3806,17 @@ fn build_positioner<T: 'static>(
     let (width, height) = size.to_set_i32();
     positioner.set_size(width, height);
     match placement {
-        PopupPlacement::Position((px, py)) => {
-            positioner.set_anchor_rect(px, py, 1, 1);
-            positioner.set_anchor(anchor);
-            positioner.set_gravity(gravity);
-        }
+        PopupPlacement::Position((px, py)) => positioner.set_anchor_rect(px, py, 1, 1),
         PopupPlacement::Anchored {
             position: (arx, ary),
             size: rect,
         } => {
             let (arw, arh) = rect.to_set_i32();
-            if anchor == xdg_positioner::Anchor::Bottom && gravity == xdg_positioner::Gravity::Bottom {
-                let center_x = arx + arw / 2;
-                let real_anchor_x = center_x - width / 2;
-                positioner.set_anchor_rect(real_anchor_x, ary, width, arh);
-                positioner.set_anchor(xdg_positioner::Anchor::BottomLeft);
-                positioner.set_gravity(xdg_positioner::Gravity::BottomRight);
-            } else if anchor == xdg_positioner::Anchor::Top && gravity == xdg_positioner::Gravity::Top {
-                let center_x = arx + arw / 2;
-                let real_anchor_x = center_x - width / 2;
-                positioner.set_anchor_rect(real_anchor_x, ary, width, arh);
-                positioner.set_anchor(xdg_positioner::Anchor::TopLeft);
-                positioner.set_gravity(xdg_positioner::Gravity::TopRight);
-            } else {
-                positioner.set_anchor_rect(arx, ary, arw, arh);
-                positioner.set_anchor(anchor);
-                positioner.set_gravity(gravity);
-            }
+            positioner.set_anchor_rect(arx, ary, arw, arh);
         }
     }
+    positioner.set_anchor(anchor);
+    positioner.set_gravity(gravity);
     positioner.set_constraint_adjustment(constraint_adjustment);
     if positioner.version() >= 3 {
         positioner.set_reactive();
