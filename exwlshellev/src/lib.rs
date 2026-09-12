@@ -3292,7 +3292,31 @@ impl<T: 'static> WindowState<T> {
                             };
                             positioner.destroy();
 
-                            if matches!(window_state.units[index].shell, Shell::PopUp(_)) {
+                            let is_xdg_toplevel_root = {
+                                let mut current_idx = Some(index);
+                                let mut root_is_toplevel = false;
+                                while let Some(idx) = current_idx {
+                                    match &window_state.units[idx].shell {
+                                        Shell::XdgTopLevel(_) => {
+                                            root_is_toplevel = true;
+                                            break;
+                                        }
+                                        _ => {
+                                            current_idx = window_state.units[idx].parent.and_then(
+                                                |parent_id| {
+                                                    window_state
+                                                        .units
+                                                        .iter()
+                                                        .position(|u| u.id == parent_id)
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                                root_is_toplevel
+                            };
+
+                            if is_xdg_toplevel_root {
                                 match (window_state.seat_back.as_ref(), grab_serial) {
                                     (Some(seat), Some(serial)) => popup.grab(seat, serial),
                                     (None, Some(_)) => log::warn!(
