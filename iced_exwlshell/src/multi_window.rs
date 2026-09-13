@@ -1106,7 +1106,7 @@ where
 
                 let scaled_settings = settings.scale(parent_scale);
                 self.pending_popup_settings
-                    .insert(iced_id, scaled_settings.clone());
+                    .insert(iced_id, scaled_settings);
 
                 let IcedNewPopupSettings {
                     size,
@@ -1153,6 +1153,7 @@ where
                 let scaled_settings = settings.scale(parent_scale);
                 if let Some(iced_id) = iced_id
                     && let Some(window) = self.window_manager.get_mut(iced_id)
+                    && window.popup_settings.is_some()
                 {
                     window.popup_settings = Some(scaled_settings);
                 }
@@ -1200,31 +1201,16 @@ where
                     (f64::from(mw) * scale).round() as u32,
                     (f64::from(mh) * scale).round() as u32,
                 );
-                let placement = PopupPlacement::Position((x, y));
-                let constraint_adjustment = PopupConstraintAdjustment::FlipX
-                    | PopupConstraintAdjustment::FlipY
-                    | PopupConstraintAdjustment::SlideX
-                    | PopupConstraintAdjustment::SlideY;
-
-                self.pending_popup_settings.insert(
-                    iced_id,
-                    IcedNewPopupSettings {
-                        size,
-                        parent: Some(window.iced_id),
-                        placement,
-                        anchor: PopupAnchor::TopLeft,
-                        gravity: menu_setting.gravity,
-                        constraint_adjustment,
-                    },
-                );
-
                 let popup_settings = NewPopUpSettings {
                     size,
                     id: parent_layer_shell_id,
-                    placement,
+                    placement: PopupPlacement::Position((x, y)),
                     anchor: PopupAnchor::TopLeft,
                     gravity: menu_setting.gravity,
-                    constraint_adjustment,
+                    constraint_adjustment: PopupConstraintAdjustment::FlipX
+                        | PopupConstraintAdjustment::FlipY
+                        | PopupConstraintAdjustment::SlideX
+                        | PopupConstraintAdjustment::SlideY,
                     grab_serial: None,
                 };
                 let layer_shell_id = exwlshellev::id::Id::unique();
