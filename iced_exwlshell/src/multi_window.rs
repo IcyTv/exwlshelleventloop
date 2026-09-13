@@ -65,6 +65,13 @@ enum PresentRecovery {
     Fatal,
 }
 
+fn scaled_popup_size(size: Size, scale: f64) -> Option<Size<u32>> {
+    let width = (size.width as f64 * scale).ceil() as u32;
+    let height = (size.height as f64 * scale).ceil() as u32;
+
+    (width > 0 && height > 0).then_some(Size::new(width, height))
+}
+
 fn present_recovery(error: &compositor::SurfaceError) -> PresentRecovery {
     match error {
         compositor::SurfaceError::Outdated => PresentRecovery::Reconfigure,
@@ -374,6 +381,69 @@ where
         self
     }
 
+    fn build_user_interface(
+        ev: &mut WindowState<IcedId>,
+        user_interfaces: &mut UserInterfaces<P>,
+        iced_id: IcedId,
+        cache: user_interface::Cache,
+        window: &mut Window<P, C>,
+        measure_popup: bool,
+    ) {
+        let build_size = if measure_popup {
+            Size::new(4096.0, 4096.0)
+        } else {
+            window.state.viewport().logical_size()
+        };
+
+        user_interfaces.build(
+            iced_id,
+            cache,
+            &mut window.renderer.borrow_mut(),
+            build_size,
+        );
+
+        if !measure_popup {
+            return;
+        }
+
+        let Some(ui) = user_interfaces.ui_mut(&iced_id) else {
+            return;
+        };
+        let target_size = scaled_popup_size(ui.min_size(), window.state.application_scale_factor());
+        let current_size = window.state.window_size();
+
+        if let Some(target_size) = target_size
+            && target_size != current_size
+            && let Some(popup_settings) = window.popup_settings
+        {
+            window.state.update_view_port(
+                target_size.width,
+                target_size.height,
+                window.state.wayland_scale_factor(),
+            );
+
+            let settings = IcedNewPopupSettings {
+                size: PixelSize::px(target_size.width, target_size.height),
+                ..popup_settings
+            };
+            ev.append_return_data(ReturnData::PopUpReposition((
+                PopUpRepositionSettings {
+                    size: settings.size,
+                    placement: settings.placement,
+                    anchor: settings.anchor,
+                    gravity: settings.gravity,
+                    constraint_adjustment: settings.constraint_adjustment,
+                },
+                window.id,
+            )));
+        }
+
+        ui.relayout(
+            window.state.viewport().logical_size(),
+            &mut window.renderer.borrow_mut(),
+        );
+    }
+
     /// Create compositor synchronously. This is a one-time init that must finish
     /// before the first frame can render. Copies iced_winit logic.
     fn create_compositor(&mut self, window: Arc<WindowWrapper>, display: DisplayWrapper) {
@@ -595,58 +665,14 @@ where
 
                 window.popup_settings = self.pending_popup_settings.remove(&iced_id);
 
-                let build_size = if shell_type == shell::ShellType::PopUp {
-                    Size::new(4096.0, 4096.0)
-                } else {
-                    window.state.viewport().logical_size()
-                };
-
-                self.user_interfaces.build(
+                Self::build_user_interface(
+                    ev,
+                    &mut self.user_interfaces,
                     iced_id,
                     user_interface::Cache::default(),
-                    &mut window.renderer.borrow_mut(),
-                    build_size,
+                    window,
+                    shell_type == shell::ShellType::PopUp,
                 );
-
-                if shell_type == shell::ShellType::PopUp {
-                    if let Some(ui) = self.user_interfaces.ui_mut(&iced_id) {
-                        let min_size = ui.min_size();
-                        let app_scale = window.state.application_scale_factor();
-                        let target_w = (min_size.width as f64 * app_scale).ceil() as u32;
-                        let target_h = (min_size.height as f64 * app_scale).ceil() as u32;
-                        if target_w > 0 && target_h > 0 && (target_w != width || target_h != height) {
-                            window.state.update_view_port(target_w, target_h, scale_float);
-                            ui.relayout(
-                                window.state.viewport().logical_size(),
-                                &mut window.renderer.borrow_mut(),
-                            );
-                            if let Some(popup_settings) = &window.popup_settings {
-                                let new_settings = IcedNewPopupSettings {
-                                    size: PixelSize::px(target_w, target_h),
-                                    ..*popup_settings
-                                };
-                                let IcedNewPopupSettings {
-                                    size,
-                                    placement,
-                                    anchor,
-                                    gravity,
-                                    constraint_adjustment,
-                                    ..
-                                } = new_settings;
-                                ev.append_return_data(ReturnData::PopUpReposition((
-                                    PopUpRepositionSettings {
-                                        size,
-                                        placement,
-                                        anchor,
-                                        gravity,
-                                        constraint_adjustment,
-                                    },
-                                    unit_id,
-                                )));
-                            }
-                        }
-                    }
-                }
 
                 events.push(IcedEvent::Window(IcedWindowEvent::Opened {
                     position: None,
@@ -1315,11 +1341,14 @@ where
                 let Some(window) = self.window_manager.get_mut(iced_id) else {
                     continue;
                 };
-                self.user_interfaces.build(
+                let measure_popup = window.popup_settings.is_some();
+                Self::build_user_interface(
+                    ev,
+                    &mut self.user_interfaces,
                     iced_id,
                     cache,
-                    &mut window.renderer.borrow_mut(),
-                    window.state.viewport().logical_size(),
+                    window,
+                    measure_popup,
                 );
             }
         } else {
@@ -1692,5 +1721,25 @@ pub(crate) fn run_action<P, C, E: Executor>(
             }
             ev.request_refresh_all(RefreshRequest::NextFrame);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scaled_popup_size;
+    use iced_core::Size;
+
+    #[test]
+    fn popup_size_is_scaled_and_rounded_up() {
+        assert_eq!(
+            scaled_popup_size(Size::new(320.0, 241.25), 1.25),
+            Some(Size::new(400, 302))
+        );
+    }
+
+    #[test]
+    fn popup_size_rejects_empty_dimensions() {
+        assert_eq!(scaled_popup_size(Size::new(320.0, 0.0), 1.0), None);
+        assert_eq!(scaled_popup_size(Size::new(0.0, 240.0), 1.0), None);
     }
 }
