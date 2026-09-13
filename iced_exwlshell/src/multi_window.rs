@@ -410,22 +410,16 @@ where
             return;
         };
         let target_size = scaled_popup_size(ui.min_size(), window.state.application_scale_factor());
-        let current_size = window.state.window_size();
 
         if let Some(target_size) = target_size
-            && target_size != current_size
             && let Some(popup_settings) = window.popup_settings
+            && popup_settings.size.to_set() != (target_size.width, target_size.height)
         {
-            window.state.update_view_port(
-                target_size.width,
-                target_size.height,
-                window.state.wayland_scale_factor(),
-            );
-
             let settings = IcedNewPopupSettings {
                 size: PixelSize::px(target_size.width, target_size.height),
                 ..popup_settings
             };
+            window.popup_settings = Some(settings);
             ev.append_return_data(ReturnData::PopUpReposition((
                 PopUpRepositionSettings {
                     size: settings.size,
@@ -1157,6 +1151,11 @@ where
                 .unwrap_or(1.0);
 
                 let scaled_settings = settings.scale(parent_scale);
+                if let Some(iced_id) = iced_id
+                    && let Some(window) = self.window_manager.get_mut(iced_id)
+                {
+                    window.popup_settings = Some(scaled_settings);
+                }
                 let IcedNewPopupSettings {
                     size,
                     placement,
@@ -1201,17 +1200,31 @@ where
                     (f64::from(mw) * scale).round() as u32,
                     (f64::from(mh) * scale).round() as u32,
                 );
+                let placement = PopupPlacement::Position((x, y));
+                let constraint_adjustment = PopupConstraintAdjustment::FlipX
+                    | PopupConstraintAdjustment::FlipY
+                    | PopupConstraintAdjustment::SlideX
+                    | PopupConstraintAdjustment::SlideY;
+
+                self.pending_popup_settings.insert(
+                    iced_id,
+                    IcedNewPopupSettings {
+                        size,
+                        parent: Some(window.iced_id),
+                        placement,
+                        anchor: PopupAnchor::TopLeft,
+                        gravity: menu_setting.gravity,
+                        constraint_adjustment,
+                    },
+                );
 
                 let popup_settings = NewPopUpSettings {
                     size,
                     id: parent_layer_shell_id,
-                    placement: PopupPlacement::Position((x, y)),
+                    placement,
                     anchor: PopupAnchor::TopLeft,
                     gravity: menu_setting.gravity,
-                    constraint_adjustment: PopupConstraintAdjustment::FlipX
-                        | PopupConstraintAdjustment::FlipY
-                        | PopupConstraintAdjustment::SlideX
-                        | PopupConstraintAdjustment::SlideY,
+                    constraint_adjustment,
                     grab_serial: None,
                 };
                 let layer_shell_id = exwlshellev::id::Id::unique();
