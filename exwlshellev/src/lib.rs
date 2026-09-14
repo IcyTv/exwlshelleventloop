@@ -1188,6 +1188,42 @@ impl<T: 'static> WindowState<T> {
         order.push(id);
     }
 
+    fn collect_popup_branches_outside_parent_chain(&self, parent: id::Id, order: &mut Vec<id::Id>) {
+        let mut parent_chain = Vec::new();
+        let mut current = Some(parent);
+        while let Some(id) = current {
+            let Some(unit) = self.units.iter().find(|unit| unit.id == id) else {
+                break;
+            };
+            if matches!(unit.shell, Shell::PopUp(_)) {
+                parent_chain.push(id);
+            }
+            current = unit.parent;
+        }
+
+        let roots = self
+            .units
+            .iter()
+            .filter(|unit| {
+                matches!(unit.shell, Shell::PopUp(_))
+                    && !parent_chain.contains(&unit.id)
+                    && unit.parent.is_none_or(|parent| {
+                        parent_chain.contains(&parent)
+                            || self
+                                .units
+                                .iter()
+                                .find(|candidate| candidate.id == parent)
+                                .is_none_or(|parent| !matches!(parent.shell, Shell::PopUp(_)))
+                    })
+            })
+            .map(|unit| unit.id)
+            .collect::<Vec<_>>();
+
+        for root in roots {
+            self.collect_descendants_then_self(root, order);
+        }
+    }
+
     /// forget the remembered last output, next time it will get the new activated output to set the
     /// layershell
     pub fn forget_last_output(&mut self) {
@@ -3250,6 +3286,22 @@ impl<T: 'static> WindowState<T> {
                             targetid,
                             info,
                         )) => {
+                            // xdg-shell requires a popup's parent to be the topmost popup. Close
+                            // sibling popup branches while preserving the requested parent chain.
+                            let mut replaced_popups = Vec::new();
+                            window_state.collect_popup_branches_outside_parent_chain(
+                                id,
+                                &mut replaced_popups,
+                            );
+                            for popup_id in replaced_popups {
+                                window_state.handle_event(
+                                    &mut *event_handler,
+                                    ExWlShellEvent::RequestMessages(&DispatchMessage::Closed),
+                                    Some(popup_id),
+                                );
+                                window_state.remove_shell(popup_id);
+                            }
+
                             let Some(index) =
                                 window_state.units.iter().position(|unit| unit.id == id)
                             else {
