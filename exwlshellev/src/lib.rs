@@ -3250,7 +3250,6 @@ impl<T: 'static> WindowState<T> {
                             targetid,
                             info,
                         )) => {
-                            window_state.units.retain(|unit| !matches!(unit.shell, Shell::PopUp(_)));
                             let Some(index) =
                                 window_state.units.iter().position(|unit| unit.id == id)
                             else {
