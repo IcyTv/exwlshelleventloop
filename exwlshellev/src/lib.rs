@@ -905,9 +905,9 @@ impl<T> WindowStateUnit<T> {
     /// Returns the duration until this unit needs its next refresh,
     /// or `None` if no refresh is pending, the surface has not received
     /// its initial configure, or the present slot is unavailable (waiting
-    /// for a compositor frame callback).
+    /// for a compositor frame callback or popup reposition configure).
     fn refresh_timeout(&self) -> Option<Duration> {
-        if !self.configured {
+        if !self.configured || self.pending_reposition.is_some() {
             return None;
         }
 
@@ -941,7 +941,7 @@ impl<T> WindowStateUnit<T> {
     }
 
     pub fn take_present_slot(&mut self) -> bool {
-        if !self.configured || !self.should_refresh() {
+        if !self.configured || self.pending_reposition.is_some() || !self.should_refresh() {
             return false;
         }
         if self.present_available_state != PresentAvailableState::Available {
