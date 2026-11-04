@@ -553,7 +553,10 @@ where
                     let layout_span = iced_debug::layout(iced_id);
                     window.state.update_view_port(width, height, scale_float);
                     if let Some(ui) = self.user_interfaces.ui_mut(&iced_id) {
-                        ui.relayout(window.state.viewport().logical_size(), &mut window.renderer.borrow_mut());
+                        ui.relayout(
+                            window.state.viewport().logical_size(),
+                            &mut window.renderer.borrow_mut(),
+                        );
                     }
                     layout_span.finish();
                     events.push(IcedEvent::Window(IcedWindowEvent::Resized(
@@ -681,6 +684,7 @@ where
             .as_mut()
             .expect("The compositor should have been created");
 
+        let content_updated_at = self.user_interfaces.content_updated_at(&iced_id);
         let mut ui = self
             .user_interfaces
             .ui_mut(&iced_id)
@@ -776,7 +780,12 @@ where
         }
 
         let present_span = iced_debug::present(iced_id);
-        tracing::debug!(?iced_id, width = physical_size.width, height = physical_size.height, "presenting surface");
+        tracing::debug!(
+            ?iced_id,
+            width = physical_size.width,
+            height = physical_size.height,
+            "presenting surface"
+        );
         match compositor.present(
             &mut window.renderer.borrow_mut(),
             &mut window.surface,
@@ -784,6 +793,9 @@ where
             window.state.background_color(),
             || {
                 ev.request_next_present(layer_shell_id);
+                if let Some(updated_at) = content_updated_at {
+                    ev.request_presentation(layer_shell_id, updated_at);
+                }
             },
         ) {
             Ok(()) => {
@@ -900,6 +912,13 @@ where
         let Some((iced_id, window)) = id_and_window else {
             return;
         };
+        if let ExwlShellWindowEvent::Presented { content_updated_at } = &event {
+            self.shell_broadcast.send(shell::ShellEvent::Presented {
+                window: iced_id,
+                content_updated_at: *content_updated_at,
+            });
+            return;
+        }
         if let ExwlShellWindowEvent::OutputChanged(output) = &event {
             self.shell_broadcast
                 .send(shell::ShellEvent::WindowOutputChanged {
@@ -1105,8 +1124,7 @@ where
                 .unwrap_or(1.0);
 
                 let scaled_settings = settings.scale(parent_scale);
-                self.pending_popup_settings
-                    .insert(iced_id, scaled_settings);
+                self.pending_popup_settings.insert(iced_id, scaled_settings);
 
                 let IcedNewPopupSettings {
                     size,
@@ -1556,9 +1574,12 @@ pub(crate) fn run_action<P, C, E: Executor>(
 
                 // TODO: Shared image cache in compositor
                 if let Some((_id, window)) = window_manager.iter_mut().next() {
-                    window.renderer.borrow_mut().allocate_image(&handle, move |allocation| {
-                        let _ = sender.send(allocation);
-                    });
+                    window
+                        .renderer
+                        .borrow_mut()
+                        .allocate_image(&handle, move |allocation| {
+                            let _ = sender.send(allocation);
+                        });
                 }
             }
         },

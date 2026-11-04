@@ -28,6 +28,15 @@ pub struct ShellInfo {
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum ShellEvent {
+    /// A submitted UI snapshot became visible, confirmed by wp_presentation.
+    /// This is not a redraw request or wl_surface.frame callback. Discarded
+    /// buffers never produce this event. Not replayed to late subscribers.
+    /// The timestamp is the local Instant before the view was built, allowing
+    /// owners to reject submissions from before their latest model update.
+    Presented {
+        window: Id,
+        content_updated_at: std::time::Instant,
+    },
     /// Surface was created.
     NewShell(ShellInfo),
     /// Window was closed.
@@ -184,4 +193,35 @@ fn publish(registry: &mut Registry, event: ShellEvent) {
     registry
         .subscribers
         .retain(|sender| sender.unbounded_send(event.clone()).is_ok());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn presentation_feedback_preserves_window_and_snapshot_without_replay_state() {
+        let mut registry = Registry::default();
+        let (sender, mut receiver) = mpsc::unbounded();
+        registry.subscribers.push(sender);
+        let window = Id::unique();
+        let content_updated_at = std::time::Instant::now();
+        publish(
+            &mut registry,
+            ShellEvent::Presented {
+                window,
+                content_updated_at,
+            },
+        );
+        let event = receiver.try_recv().expect("feedback delivered");
+        assert!(
+            matches!(event, ShellEvent::Presented { window: actual, content_updated_at: stamp }
+            if actual == window && stamp == content_updated_at)
+        );
+        // Only these maps are replayed by listen(). Old presentation events must
+        // never be replayed when an application starts awaiting a later frame.
+        assert!(registry.shells.is_empty());
+        assert!(registry.outputs.is_empty());
+        assert!(registry.monitors.is_empty());
+    }
 }

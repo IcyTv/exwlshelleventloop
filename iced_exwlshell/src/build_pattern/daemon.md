@@ -369,3 +369,13 @@ impl Counter {
 }
 
 ```
+
+`ShellEvent::Presented { window, content_updated_at }` is emitted only after
+`wp_presentation` confirms that a submitted UI snapshot was displayed. The
+timestamp is a local `Instant` taken **before building that view**, not a redraw
+request timestamp and not the compositor's presentation clock. Compare it with
+the time of the model update whose visibility you need to confirm. Discarded
+buffers, closed surfaces and compositors without presentation-time never
+generate a successful acknowledgement. Feedback is not replayed to late
+subscribers. Filter it out when not awaiting presentation: unconditionally
+turning every feedback event into an application update can cause a redraw loop.

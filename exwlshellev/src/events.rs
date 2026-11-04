@@ -285,6 +285,9 @@ pub enum Ime {
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub(crate) enum DispatchMessageInner {
+    Presented {
+        content_updated_at: std::time::Instant,
+    },
     NewDisplay(WlOutput),
     OutputAdded(OutputInfo),
     OutputUpdated(OutputInfo),
@@ -370,6 +373,10 @@ pub(crate) enum DispatchMessageInner {
 /// This tell the DispatchMessage by dispatch
 #[derive(Debug)]
 pub enum DispatchMessage {
+    /// The compositor displayed a submission built from this content snapshot.
+    Presented {
+        content_updated_at: std::time::Instant,
+    },
     /// forward the event of wayland-mouse
     MouseButton {
         state: WEnum<ButtonState>,
@@ -478,6 +485,9 @@ pub enum DispatchMessage {
 impl From<DispatchMessageInner> for DispatchMessage {
     fn from(val: DispatchMessageInner) -> Self {
         match val {
+            DispatchMessageInner::Presented { content_updated_at } => {
+                DispatchMessage::Presented { content_updated_at }
+            }
             DispatchMessageInner::NewDisplay(_) => {
                 unreachable!("NewDisplay is handled before conversion")
             }

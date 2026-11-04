@@ -119,6 +119,10 @@ mod strtoshape;
 use events::DispatchMessageInner;
 use size::warn_if_exclusive_zone_ignored;
 pub use size::{Extent, LayerSize, PixelSize};
+use wayland_protocols::wp::presentation_time::client::{
+    wp_presentation::{self, WpPresentation},
+    wp_presentation_feedback::{self, WpPresentationFeedback},
+};
 
 pub mod id;
 
@@ -1067,6 +1071,7 @@ pub struct WindowState<T> {
     input_panel: Option<ZwpInputPanelV1>,
 
     fractional_scale_manager: Option<WpFractionalScaleManagerV1>,
+    presentation: Option<WpPresentation>,
     globals: Option<GlobalList>,
 
     // background
@@ -1674,6 +1679,7 @@ impl<T> Default for WindowState<T> {
             viewporter: None,
             globals: None,
             fractional_scale_manager: None,
+            presentation: None,
             virtual_keyboard: None,
 
             output_state: None,
@@ -2382,6 +2388,41 @@ impl<T> Dispatch<zwp_text_input_v3::ZwpTextInputV3, TextInputData> for WindowSta
     }
 }
 
+impl<T> Dispatch<WpPresentation, ()> for WindowState<T> {
+    fn event(
+        _: &mut Self,
+        _: &WpPresentation,
+        _: wp_presentation::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl<T> Dispatch<WpPresentationFeedback, (id::Id, std::time::Instant)> for WindowState<T> {
+    fn event(
+        state: &mut Self,
+        _: &WpPresentationFeedback,
+        event: wp_presentation_feedback::Event,
+        data: &(id::Id, std::time::Instant),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        // Discarded submissions and callbacks for closed surfaces are not acknowledgements.
+        if matches!(event, wp_presentation_feedback::Event::Presented { .. })
+            && state.get_unit_with_id(data.0).is_some()
+        {
+            state.message.push((
+                Some(data.0),
+                DispatchMessageInner::Presented {
+                    content_updated_at: data.1,
+                },
+            ));
+        }
+    }
+}
+
 impl<T> Dispatch<WlCallback, (id::Id, PresentAvailableState)> for WindowState<T> {
     fn event(
         state: &mut Self,
@@ -2486,6 +2527,7 @@ impl<T: 'static> WindowState<T> {
         self.display = Some(connection.display());
 
         let qh = event_queue.handle();
+        self.presentation = globals.bind::<WpPresentation, _, _>(&qh, 1..=1, ()).ok();
 
         self.registry_state = Some(RegistryState::new(&globals));
         self.output_state = Some(OutputState::new(&globals, &qh));
@@ -3821,6 +3863,20 @@ impl<T: 'static> WindowState<T> {
     pub fn request_next_present(&mut self, id: id::Id) {
         self.get_mut_unit_with_id(id)
             .map(WindowStateUnit::request_next_present);
+    }
+
+    /// Request real presentation feedback for the next buffer commit on this surface.
+    /// Call from the renderer's pre-present callback, not on a redraw request.
+    /// `content_updated_at` identifies when the submitted UI snapshot was built;
+    /// it is not the compositor's presentation-clock timestamp.
+    /// Returns false when presentation-time is unavailable (never synthesizes success).
+    pub fn request_presentation(&self, id: id::Id, content_updated_at: std::time::Instant) -> bool {
+        let (Some(presentation), Some(unit)) = (&self.presentation, self.get_unit_with_id(id))
+        else {
+            return false;
+        };
+        presentation.feedback(&unit.window.wl_surface, &unit.qh, (id, content_updated_at));
+        true
     }
 
     pub fn reset_present_slot(&mut self, id: id::Id) {

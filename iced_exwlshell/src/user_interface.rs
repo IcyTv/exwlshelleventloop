@@ -103,6 +103,7 @@ pub struct UserInterfaces<P: Program> {
     #[allow(clippy::type_complexity)]
     uis: HashMap<Id, IcedUserInterface<'static, P::Message, P::Theme, P::Renderer>>,
     application: Instance<P>,
+    built_at: HashMap<Id, std::time::Instant>,
 }
 
 impl<P: Program> UserInterfaces<P>
@@ -113,6 +114,7 @@ where
         Self {
             uis: HashMap::new(),
             application,
+            built_at: HashMap::new(),
         }
     }
 
@@ -121,6 +123,7 @@ where
     }
 
     pub fn remove(&mut self, id: &Id) -> Option<Cache> {
+        self.built_at.remove(id);
         self.uis.remove(id).map(IcedUserInterface::into_cache)
     }
 
@@ -147,6 +150,7 @@ where
     }
 
     pub fn build(&mut self, id: Id, cache: Cache, renderer: &mut P::Renderer, size: Size) {
+        self.built_at.insert(id, std::time::Instant::now());
         let view_span = iced_debug::view(id);
         let view = self.application.view(id);
         view_span.finish();
@@ -157,6 +161,10 @@ where
         // SAFETY ui won't outlive application.
         let ui: IcedUserInterface<'static, _, _, _> = unsafe { mem::transmute(ui) };
         self.uis.insert(id, ui);
+    }
+
+    pub fn content_updated_at(&self, id: &Id) -> Option<std::time::Instant> {
+        self.built_at.get(id).copied()
     }
 }
 
