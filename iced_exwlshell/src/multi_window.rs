@@ -864,12 +864,13 @@ where
 
         let physical_size = window.state.viewport().physical_size();
 
-        if self
-            .cached_layer_dimensions
-            .get(&iced_id)
-            .is_none_or(|(size, scale)| {
-                *size != physical_size || *scale != window.state.viewport().scale_factor()
-            })
+        if !is_new_window
+            && self
+                .cached_layer_dimensions
+                .get(&iced_id)
+                .is_none_or(|(size, scale)| {
+                    *size != physical_size || *scale != window.state.viewport().scale_factor()
+                })
         {
             self.cached_layer_dimensions.insert(
                 iced_id,

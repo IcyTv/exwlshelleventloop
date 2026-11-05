@@ -115,8 +115,9 @@ where
             scale = fractal_scale,
             "creating window renderer"
         );
-        let surface =
-            compositor.create_surface(window.clone(), physical_size.width, physical_size.height);
+        // The first layout is not presented and may resize a popup. Allocate
+        // its buffers only when a later refresh is actually ready to present.
+        let surface = compositor.create_surface(window.clone(), 0, 0);
         let renderer = self.shared_renderer.get_or_insert_with(|| {
             Rc::new(RefCell::new(compositor.create_renderer(renderer_settings)))
         });
