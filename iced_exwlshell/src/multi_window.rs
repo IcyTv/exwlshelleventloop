@@ -57,6 +57,34 @@ mod window_manager;
 
 type MultiRuntime<E, Message> = Runtime<E, IcedProxy<Action<Message>>, Action<Message>>;
 
+/// Visible popup bounds reported by widgets, independently of root UI capacity.
+/// Coordinates are application-logical; the backend applies application scaling.
+#[derive(Default)]
+struct PopupWindowGeometry(Option<iced_core::Rectangle>);
+
+fn scaled_popup_geometry(bounds: iced_core::Rectangle, scale: f64) -> (i32, i32, i32, i32) {
+    (
+        (bounds.x as f64 * scale).round() as i32,
+        (bounds.y as f64 * scale).round() as i32,
+        (bounds.width as f64 * scale).ceil().max(1.0) as i32,
+        (bounds.height as f64 * scale).ceil().max(1.0) as i32,
+    )
+}
+impl iced_core::widget::Operation for PopupWindowGeometry {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn iced_core::widget::Operation)) {
+        operate(self);
+    }
+    fn container(&mut self, id: Option<&iced_core::widget::Id>, bounds: iced_core::Rectangle) {
+        if id
+            == Some(&iced_core::widget::Id::new(
+                crate::actions::POPUP_WINDOW_GEOMETRY_ID,
+            ))
+        {
+            self.0 = Some(bounds);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PresentRecovery {
     Reconfigure,
@@ -406,10 +434,24 @@ where
             return;
         }
 
-        let Some(ui) = user_interfaces.ui_mut(&iced_id) else {
+        let Some(mut ui) = user_interfaces.ui_mut(&iced_id) else {
             return;
         };
-        let target_size = scaled_popup_size(ui.min_size(), window.state.application_scale_factor());
+        let scale = window.state.application_scale_factor();
+        let capacity = scaled_popup_size(ui.min_size(), scale);
+        let mut geometry = PopupWindowGeometry::default();
+        ui.operate(&window.renderer.borrow(), &mut geometry);
+        let rect = geometry
+            .0
+            .map(|bounds| scaled_popup_geometry(bounds, scale));
+        if let Some(capacity) = capacity
+            && let Some(unit) = ev.get_mut_unit_with_id(window.id)
+        {
+            unit.set_popup_surface_geometry(rect, (capacity.width, capacity.height));
+        }
+        let target_size = rect
+            .map(|(_, _, width, height)| Size::new(width as u32, height as u32))
+            .or(capacity);
 
         if let Some(target_size) = target_size
             && let Some(popup_settings) = window.popup_settings
@@ -1748,6 +1790,32 @@ pub(crate) fn run_action<P, C, E: Executor>(
 mod tests {
     use super::scaled_popup_size;
     use iced_core::Size;
+
+    #[test]
+    fn popup_geometry_marker_excludes_margins_and_scales_once() {
+        use iced_core::{
+            Rectangle,
+            widget::{Id, Operation},
+        };
+        let bounds = Rectangle {
+            x: 128.0,
+            y: 128.0,
+            width: 444.0,
+            height: 307.25,
+        };
+        let mut operation = super::PopupWindowGeometry::default();
+        operation.container(Some(&Id::new("unrelated")), bounds);
+        assert_eq!(operation.0, None);
+        operation.container(
+            Some(&Id::new(crate::actions::POPUP_WINDOW_GEOMETRY_ID)),
+            bounds,
+        );
+        assert_eq!(operation.0, Some(bounds));
+        assert_eq!(
+            super::scaled_popup_geometry(bounds, 1.25),
+            (160, 160, 555, 385)
+        );
+    }
 
     #[test]
     fn popup_size_is_scaled_and_rounded_up() {

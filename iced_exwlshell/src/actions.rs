@@ -238,3 +238,12 @@ impl ExwlShellCustomActionWithId {
         Self(id, action)
     }
 }
+/// Widget-operation container ID for independent visible popup geometry.
+///
+/// A root popup wrapper may report a container with this ID and its visible
+/// bounds in application-logical coordinates. The UI minimum size remains the
+/// buffer/input envelope; only these bounds participate in xdg positioning.
+/// This lets transparent gutters and shadows extend off-screen without moving
+/// the visible popup. Report the marker on every build, including after margins
+/// return to zero. Normal popups without a marker retain configure-driven sizing.
+pub const POPUP_WINDOW_GEOMETRY_ID: &str = "exwlshell.popup.window-geometry";

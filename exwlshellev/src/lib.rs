@@ -453,6 +453,7 @@ impl<T> WindowStateUnitBuilder<T> {
                 configured,
                 blur_option: BlurOption::None,
                 pending_reposition: None,
+                popup_surface_geometry: None,
                 effect: None,
                 // Unknown why it is 120
                 scale: 120,
@@ -567,6 +568,8 @@ pub struct WindowStateUnit<T> {
 
     /// Only meaningful for PopUp
     pending_reposition: Option<u32>,
+    /// Explicit visible window geometry and independent buffer capacity.
+    popup_surface_geometry: Option<((i32, i32, i32, i32), (u32, u32))>,
 
     scale: u32,
     request_flag: WindowStateUnitRequestFlag,
@@ -608,6 +611,29 @@ impl<T> WindowStateUnit<T> {
     /// get the WindowState id
     pub fn id(&self) -> id::Id {
         self.id
+    }
+
+    /// Keep transparent popup margins out of xdg placement constraints. Buffer
+    /// capacity is client-owned; configure dimensions describe window geometry.
+    pub fn set_popup_surface_geometry(
+        &mut self,
+        geometry: Option<(i32, i32, i32, i32)>,
+        capacity: (u32, u32),
+    ) {
+        let Shell::PopUp((_, xdg)) = &self.shell else {
+            return;
+        };
+        let next = geometry.map(|rect| (rect, capacity));
+        if next == self.popup_surface_geometry {
+            return;
+        }
+        let rect = geometry.unwrap_or((0, 0, capacity.0 as i32, capacity.1 as i32));
+        xdg.set_window_geometry(rect.0, rect.1, rect.2.max(1), rect.3.max(1));
+        self.popup_surface_geometry = next;
+        if geometry.is_some() && self.size != capacity {
+            self.size = capacity;
+            self.request_refresh(RefreshRequest::NextFrame);
+        }
     }
 
     pub fn wl_shell_type(&self) -> WlShellType {
@@ -2128,7 +2154,9 @@ impl<T> Dispatch<xdg_popup::XdgPopup, ()> for WindowState<T> {
                 else {
                     return;
                 };
-                state.units[unit_index].size = (width as u32, height as u32);
+                state.units[unit_index].size = state.units[unit_index]
+                    .popup_surface_geometry
+                    .map_or((width as u32, height as u32), |(_, capacity)| capacity);
                 state.units[unit_index].request_refresh(RefreshRequest::NextFrame);
             }
             xdg_popup::Event::PopupDone => {
