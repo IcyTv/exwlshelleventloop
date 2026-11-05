@@ -1077,25 +1077,28 @@ where
                 unit.get_wlsurface().commit();
             }
             let stamp = Instant::now();
+            tracing::debug!(target: "iced_exwlshell::pacing", ?visual_id, ?iced_id, root = ?placement.root, scale = pose.transformation.scale_factor(), "PACE_BEGIN capture");
             let presentation = compositor::FramePresentation {
                 transformation: pose.transformation,
                 opacity: pose.opacity,
                 clip: pose.clip,
             };
-            match compositor.present_frame(
+            let presented = visual.timeline.submit(|| { compositor.present_frame(
                 visual.frame.as_ref(),
                 presentation,
                 &mut visual.surface,
                 viewport,
                 || {
+                    tracing::debug!(target: "iced_exwlshell::pacing", ?visual_id, elapsed_us = stamp.elapsed().as_micros(), "PACE_PRE capture");
                     ev.request_next_present(visual_id);
                     ev.request_presentation(visual_id, stamp);
                 },
-            ) {
+            ) });
+            match presented {
                 Ok(()) => {
+                    tracing::debug!(target: "iced_exwlshell::pacing", ?visual_id, elapsed_us = stamp.elapsed().as_micros(), "PACE_END capture");
                     visual.pose = pose;
                     visual.finished = finished;
-                    visual.timeline.started.get_or_insert(Instant::now());
                     visual.pending = Some(popup_visuals::Submission {
                         stamp,
                         content: content_updated_at.unwrap_or(stamp),
@@ -1131,7 +1134,6 @@ where
                             &error,
                         );
                     }
-                    visual.timeline.retarget(visual.pose, false);
                     ev.request_refresh(
                         visual_id,
                         RefreshRequest::At(Instant::now() + Duration::from_millis(16)),
@@ -1142,6 +1144,8 @@ where
         }
 
         let present_span = iced_debug::present(iced_id);
+        let present_started = Instant::now();
+        tracing::debug!(target: "iced_exwlshell::pacing", surface = ?layer_shell_id, ?iced_id, width = physical_size.width, height = physical_size.height, "PACE_BEGIN normal");
         tracing::debug!(
             ?iced_id,
             width = physical_size.width,
@@ -1154,6 +1158,7 @@ where
             window.state.viewport(),
             window.state.background_color(),
             || {
+                tracing::debug!(target: "iced_exwlshell::pacing", surface = ?layer_shell_id, ?iced_id, elapsed_us = present_started.elapsed().as_micros(), "PACE_PRE normal");
                 ev.request_next_present(layer_shell_id);
                 if let Some(updated_at) = content_updated_at {
                     ev.request_presentation(layer_shell_id, updated_at);
@@ -1161,6 +1166,7 @@ where
             },
         ) {
             Ok(()) => {
+                tracing::debug!(target: "iced_exwlshell::pacing", surface = ?layer_shell_id, ?iced_id, elapsed_us = present_started.elapsed().as_micros(), "PACE_END normal");
                 present_span.finish();
             }
             Err(error) => {
@@ -1206,6 +1212,7 @@ where
         error: &compositor::SurfaceError,
     ) {
         let size = viewport.physical_size();
+        tracing::debug!(target: "iced_exwlshell::pacing", surface = ?wrapper.id(), ?error, "PACE_RECOVERY");
         match present_recovery(error) {
             PresentRecovery::Recreate => {
                 *surface = compositor.create_surface(wrapper, size.width, size.height);
@@ -1235,6 +1242,7 @@ where
         let (pose, finished) = visual.timeline.sample(Instant::now(), visual.bounds);
         assert!(pose.is_valid(), "invalid popup exit pose");
         let stamp = Instant::now();
+        tracing::debug!(target: "iced_exwlshell::pacing", ?id, root = ?visual.placement.root, closing = visual.native.is_none(), scale = pose.transformation.scale_factor(), "PACE_BEGIN retained");
         let presentation = compositor::FramePresentation {
             transformation: pose.transformation,
             opacity: pose.opacity,
@@ -1259,20 +1267,22 @@ where
                 }
             }
         }
-        match compositor.present_frame(
+        let presented = visual.timeline.submit(|| { compositor.present_frame(
             visual.frame.as_ref(),
             presentation,
             &mut visual.surface,
             &visual.viewport,
             || {
+                tracing::debug!(target: "iced_exwlshell::pacing", ?id, elapsed_us = stamp.elapsed().as_micros(), "PACE_PRE retained");
                 ev.request_next_present(id);
                 ev.request_presentation(id, stamp);
             },
-        ) {
+        ) });
+        match presented {
             Ok(()) => {
+                tracing::debug!(target: "iced_exwlshell::pacing", ?id, elapsed_us = stamp.elapsed().as_micros(), "PACE_END retained");
                 visual.pose = pose;
                 visual.finished = finished;
-                visual.timeline.started.get_or_insert(Instant::now());
                 visual.pending = Some(popup_visuals::Submission {
                     stamp,
                     content: visual.frame_content.unwrap_or(stamp),
@@ -1316,9 +1326,6 @@ where
                         &error,
                     );
                 }
-                visual
-                    .timeline
-                    .retarget(visual.pose, visual.native.is_none());
                 ev.request_refresh(
                     id,
                     RefreshRequest::At(Instant::now() + Duration::from_millis(16)),

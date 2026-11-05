@@ -196,6 +196,15 @@ impl Timeline {
         self.closing = closing;
         self.started = None;
     }
+    /// Start only on the first successful submission. Surface recovery is not
+    /// an animation retarget: retries keep the original trajectory/deadline.
+    pub fn submit<E>(&mut self, submit: impl FnOnce() -> Result<(), E>) -> Result<(), E> {
+        let result = submit();
+        if result.is_ok() {
+            self.started.get_or_insert(Instant::now());
+        }
+        result
+    }
     pub fn sample(&self, now: Instant, bounds: Rectangle) -> (Pose, bool) {
         let transition = if self.closing {
             self.profile.exit
@@ -316,6 +325,56 @@ mod tests {
         timeline.retarget(closing, false);
         assert_eq!(timeline.sample(now, bounds).0, closing);
         assert!(closing.is_valid());
+    }
+
+    #[test]
+    fn surface_retry_preserves_opening_progress_and_original_deadline() {
+        let bounds = Rectangle::with_size(iced_core::Size::new(400.0, 300.0));
+        let mut timeline = Timeline::new(Profile::default(), bounds);
+        let start = Instant::now();
+        timeline.started = Some(start);
+        let before = timeline.sample(start + Duration::from_millis(25), bounds).0;
+        assert!(timeline.submit(|| Err(())).is_err());
+        let (after, finished) = timeline.sample(start + Duration::from_millis(34), bounds);
+        assert_eq!(
+            timeline.started,
+            Some(start),
+            "a retry must not restart the animation clock"
+        );
+        assert!(after.transformation.scale_factor() >= before.transformation.scale_factor());
+        assert!(!finished);
+        assert!(timeline.sample(start + Duration::from_millis(50), bounds).1);
+    }
+
+    #[test]
+    fn only_the_first_successful_submission_starts_the_clock() {
+        let bounds = Rectangle::with_size(iced_core::Size::new(400.0, 300.0));
+        let mut timeline = Timeline::new(Profile::default(), bounds);
+        assert!(timeline.submit(|| Err(())).is_err());
+        assert!(timeline.started.is_none());
+        assert_eq!(timeline.submit(|| Ok::<_, ()>(())), Ok(()));
+        let started = timeline
+            .started
+            .expect("first successful submission starts the clock");
+        assert_eq!(timeline.submit(|| Ok::<_, ()>(())), Ok(()));
+        assert_eq!(timeline.started, Some(started));
+    }
+
+    #[test]
+    fn surface_retry_preserves_closing_progress_and_unstarted_submissions_stay_unstarted() {
+        let bounds = Rectangle::with_size(iced_core::Size::new(400.0, 300.0));
+        let mut timeline = Timeline::new(Profile::default(), bounds);
+        assert!(timeline.submit(|| Err(())).is_err());
+        assert!(timeline.started.is_none());
+        timeline.retarget(Pose::identity(bounds), true);
+        let start = Instant::now();
+        timeline.started = Some(start);
+        let before = timeline.sample(start + Duration::from_millis(30), bounds).0;
+        assert!(timeline.submit(|| Err(())).is_err());
+        let (after, _) = timeline.sample(start + Duration::from_millis(40), bounds);
+        assert_eq!(timeline.started, Some(start));
+        assert!(after.transformation.scale_factor() <= before.transformation.scale_factor());
+        assert!(timeline.sample(start + Duration::from_millis(50), bounds).1);
     }
     #[test]
     fn queued_coordinates_keep_the_same_root_point_across_resize_and_app_scale() {

@@ -1010,7 +1010,9 @@ impl<T> WindowStateUnit<T> {
 impl<T: 'static> WindowStateUnit<T> {
     pub fn request_next_present(&mut self) {
         match self.present_available_state {
-            PresentAvailableState::Taken => {
+            PresentAvailableState::Taken | PresentAvailableState::Available => {
+                // Visual hosts may first submit from their native popup's
+                // refresh, before the host's own present slot has been taken.
                 self.present_available_state = PresentAvailableState::Requested;
                 self.frame_callback = Some(
                     self.window
@@ -1018,7 +1020,7 @@ impl<T: 'static> WindowStateUnit<T> {
                         .frame(&self.qh, (self.id, PresentAvailableState::Available)),
                 );
             }
-            PresentAvailableState::Requested | PresentAvailableState::Available => {}
+            PresentAvailableState::Requested => {}
         }
     }
 }
@@ -2482,6 +2484,7 @@ impl<T> Dispatch<WpPresentationFeedback, (id::Id, std::time::Instant)> for Windo
         _: &QueueHandle<Self>,
     ) {
         // Discarded submissions and callbacks for closed surfaces are not acknowledgements.
+        log::debug!(target: "exwlshellev::pacing", "FEEDBACK surface={:?} event={event:?}", data.0);
         if matches!(event, wp_presentation_feedback::Event::Presented { .. })
             && state.get_unit_with_id(data.0).is_some()
         {
@@ -2514,10 +2517,11 @@ impl<T> Dispatch<WlCallback, (id::Id, PresentAvailableState)> for WindowState<T>
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
-        if let WlCallbackEvent::Done { callback_data: _ } = event
+        if let WlCallbackEvent::Done { callback_data } = event
             && let Some(unit) = state.get_mut_unit_with_id(data.0)
             && unit.frame_callback.as_ref() == Some(proxy)
         {
+            log::debug!(target: "exwlshellev::pacing", "FRAME_READY surface={:?} compositor_ms={callback_data}", data.0);
             unit.frame_callback = None;
             unit.present_available_state = data.1;
         }
