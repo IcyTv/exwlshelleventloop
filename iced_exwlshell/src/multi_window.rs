@@ -1286,6 +1286,21 @@ where
                     }),
                 });
                 ev.request_owner_wakeup(stamp + Duration::from_millis(100));
+                if finished && visual.native.is_none() {
+                    tracing::debug!(
+                        "POPUP_EXIT_FINISHED owner={:?} host={:?} scale={}",
+                        visual.owner,
+                        id,
+                        pose.transformation.scale_factor()
+                    );
+                    // The exit has no interactive state left to authorize. Waiting
+                    // for this terminal frame's presentation holds its pose for
+                    // another feedback round trip before the host can disappear.
+                    ev.request_close(id);
+                    // Close requests are drained before refreshes, so a request
+                    // made during this draw needs an immediate owner turn.
+                    ev.request_owner_wakeup(Instant::now());
+                }
                 if !finished {
                     ev.request_refresh(id, RefreshRequest::NextFrame);
                 }
@@ -1442,9 +1457,7 @@ where
                                 });
                             }
                         }
-                        if visual.native.is_none() && visual.finished {
-                            ev.request_close(id);
-                        } else if !visual.finished {
+                        if !visual.finished {
                             ev.request_refresh(id, RefreshRequest::NextFrame);
                         } else if let Some(native) = visual.native {
                             ev.request_refresh(native, RefreshRequest::Wait);
