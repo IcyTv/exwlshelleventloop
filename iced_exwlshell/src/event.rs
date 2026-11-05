@@ -42,6 +42,9 @@ impl From<WEnum<KeyState>> for IcedKeyState {
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub enum WindowEvent {
+    PresentationDiscarded {
+        content_updated_at: std::time::Instant,
+    },
     Presented {
         content_updated_at: std::time::Instant,
     },
@@ -124,6 +127,11 @@ pub enum IcedWlShellEvent<Message> {
 impl WindowEvent {
     pub(crate) fn from_dispatch<T>(value: &DispatchMessage, ev: &WindowState<T>) -> Self {
         match value {
+            DispatchMessage::PresentationDiscarded { content_updated_at } => {
+                WindowEvent::PresentationDiscarded {
+                    content_updated_at: *content_updated_at,
+                }
+            }
             DispatchMessage::Presented { content_updated_at } => WindowEvent::Presented {
                 content_updated_at: *content_updated_at,
             },

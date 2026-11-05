@@ -115,6 +115,7 @@ mod events;
 mod seat;
 mod size;
 mod strtoshape;
+pub mod visual;
 
 use events::DispatchMessageInner;
 use size::warn_if_exclusive_zone_ignored;
@@ -156,6 +157,8 @@ use wayland_client::{
         wl_seat::WlSeat,
         wl_shm::WlShm,
         wl_shm_pool::WlShmPool,
+        wl_subcompositor::WlSubcompositor,
+        wl_subsurface::WlSubsurface,
         wl_surface::WlSurface,
     },
 };
@@ -304,6 +307,7 @@ pub mod reexport {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WlShellType {
+    Visual,
     LayerShell,
     PopUp,
     XdgTopLevel,
@@ -321,6 +325,7 @@ pub enum WlShellType {
 #[allow(clippy::enum_variant_names)]
 #[derive(Debug)]
 enum Shell {
+    Visual(WlSubsurface),
     LayerShell(ZwlrLayerSurfaceV1),
     PopUp((XdgPopup, XdgSurface)),
     XdgTopLevel((XdgToplevel, XdgSurface, Option<ZxdgToplevelDecorationV1>)),
@@ -373,6 +378,7 @@ impl PartialEq<ExtSessionLockSurfaceV1> for Shell {
 impl Shell {
     fn destroy(&self) {
         match self {
+            Self::Visual(surface) => surface.destroy(),
             Self::PopUp((popup, xdg_surface)) => {
                 popup.destroy();
                 xdg_surface.destroy();
@@ -427,7 +433,7 @@ impl<T> WindowStateUnitBuilder<T> {
         wmcompositor: WlCompositor,
         shell: Shell,
     ) -> Self {
-        let configured = matches!(shell, Shell::InputPanel(_));
+        let configured = matches!(shell, Shell::InputPanel(_) | Shell::Visual(_));
         Self {
             inner: WindowStateUnit {
                 id,
@@ -454,6 +460,8 @@ impl<T> WindowStateUnitBuilder<T> {
                 blur_option: BlurOption::None,
                 pending_reposition: None,
                 popup_surface_geometry: None,
+                popup_position: (0, 0),
+                coordinate_epoch: std::cell::Cell::new(0),
                 effect: None,
                 // Unknown why it is 120
                 scale: 120,
@@ -570,6 +578,8 @@ pub struct WindowStateUnit<T> {
     pending_reposition: Option<u32>,
     /// Explicit visible window geometry and independent buffer capacity.
     popup_surface_geometry: Option<((i32, i32, i32, i32), (u32, u32))>,
+    popup_position: (i32, i32),
+    coordinate_epoch: std::cell::Cell<u64>,
 
     scale: u32,
     request_flag: WindowStateUnitRequestFlag,
@@ -638,6 +648,7 @@ impl<T> WindowStateUnit<T> {
 
     pub fn wl_shell_type(&self) -> WlShellType {
         match self.shell {
+            Shell::Visual(_) => WlShellType::Visual,
             Shell::PopUp(_) => WlShellType::PopUp,
             Shell::LayerShell(_) => WlShellType::LayerShell,
             Shell::XdgTopLevel(_) => WlShellType::XdgTopLevel,
@@ -814,6 +825,8 @@ impl<T> WindowStateUnit<T> {
         let Shell::LayerShell(layer_shell) = &self.shell else {
             return;
         };
+        self.coordinate_epoch
+            .set(self.coordinate_epoch.get().wrapping_add(1));
         let (width, height) = size.to_set();
         layer_shell.set_anchor(size.resolve_anchor(anchor));
         layer_shell.set_size(width, height);
@@ -830,6 +843,8 @@ impl<T> WindowStateUnit<T> {
     /// you can reset the margin which bind to the surface
     pub fn set_margin(&self, (top, right, bottom, left): (i32, i32, i32, i32)) {
         if let Shell::LayerShell(layer_shell) = &self.shell {
+            self.coordinate_epoch
+                .set(self.coordinate_epoch.get().wrapping_add(1));
             layer_shell.set_margin(top, right, bottom, left);
             self.window.wl_surface.commit();
         }
@@ -1085,6 +1100,7 @@ pub struct WindowState<T> {
     connection: Option<Connection>,
     event_queue: Option<EventQueue<WindowState<T>>>,
     wl_compositor: Option<WlCompositor>,
+    subcompositor: Option<WlSubcompositor>,
     background_effect_manager: Option<ExtBackgroundEffectManagerV1>,
     shm: Option<WlShm>,
     cursor_manager: Option<WpCursorShapeManagerV1>,
@@ -1152,6 +1168,7 @@ pub struct WindowState<T> {
 
     ime_purpose: ImePurpose,
     ime_allowed: bool,
+    owner_wakeup: Option<Instant>,
 }
 
 impl<T: 'static> WindowState<T> {
@@ -1169,7 +1186,9 @@ impl<T: 'static> WindowState<T> {
     /// meaning the event loop can sleep indefinitely until an external
     /// event (Wayland, channel, etc.) arrives.
     fn min_dispatch_timeout(&self) -> Option<Duration> {
-        let mut min: Option<Duration> = None;
+        let mut min: Option<Duration> = self
+            .owner_wakeup
+            .map(|at| at.saturating_duration_since(Instant::now()));
         for unit in &self.units {
             match unit.refresh_timeout() {
                 Some(Duration::ZERO) => return Some(Duration::ZERO),
@@ -1422,7 +1441,7 @@ impl<T> WindowState<T> {
             return;
         };
         let scale_factor = unit.scale_float();
-        let position: dpi::LogicalPosition<u32> = position.to_logical(scale_factor);
+        let position: dpi::LogicalPosition<i32> = position.to_logical(scale_factor);
         let size: dpi::LogicalSize<u32> = size.to_logical(scale_factor);
         let (x, y) = (position.x as i32, position.y as i32);
         let (width, height) = (size.width as i32, size.height as i32);
@@ -1695,6 +1714,8 @@ impl<T> Default for WindowState<T> {
             connection: None,
             event_queue: None,
             wl_compositor: None,
+            subcompositor: None,
+            owner_wakeup: None,
             shm: None,
             wmbase: None,
             background_effect_manager: None,
@@ -1846,7 +1867,10 @@ impl<T> WindowState<T> {
     pub fn keyboard_focus_id(&self) -> Option<id::Id> {
         self.units
             .iter()
-            .find(|unit| Some(&unit.window.wl_surface) == self.keyboard_focus.as_ref())
+            .find(|unit| {
+                !matches!(unit.shell, Shell::Visual(_))
+                    && Some(&unit.window.wl_surface) == self.keyboard_focus.as_ref()
+            })
             .map(|unit| unit.id())
     }
 
@@ -1860,7 +1884,13 @@ impl<T> WindowState<T> {
                     .filter_map(|(_, id)| *id)
                     .find(|id| self.get_unit_with_id(*id).is_some())
             })
-            .or_else(|| self.units.last().map(|unit| unit.id()))
+            .or_else(|| {
+                self.units
+                    .iter()
+                    .rev()
+                    .find(|unit| !matches!(unit.shell, Shell::Visual(_)))
+                    .map(|unit| unit.id())
+            })
     }
 
     /// window id under the pointer
@@ -1874,7 +1904,9 @@ impl<T> WindowState<T> {
     fn get_id_from_surface(&self, surface: &WlSurface) -> Option<id::Id> {
         self.units
             .iter()
-            .find(|unit| &unit.window.wl_surface == surface)
+            .find(|unit| {
+                !matches!(unit.shell, Shell::Visual(_)) && &unit.window.wl_surface == surface
+            })
             .map(|unit| unit.id())
     }
 
@@ -2016,7 +2048,7 @@ impl<T: 'static> OutputHandler for WindowState<T> {
                     .push((Some(id), DispatchMessageInner::OutputChanged(output)));
             }
         }
-        for deleled in removed_states {
+        for deleled in removed_states.into_iter().rev() {
             self.closed_ids.push(deleled.id);
         }
     }
@@ -2066,6 +2098,12 @@ impl<T> Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ()> for WindowState<
                 let Some(unit_index) = unit_index else {
                     return;
                 };
+                state.units[unit_index].coordinate_epoch.set(
+                    state.units[unit_index]
+                        .coordinate_epoch
+                        .get()
+                        .wrapping_add(1),
+                );
                 state.units[unit_index].size = (width, height);
                 state.units[unit_index].configured = true;
                 state.units[unit_index].request_refresh(RefreshRequest::NextFrame);
@@ -2149,11 +2187,17 @@ impl<T> Dispatch<xdg_popup::XdgPopup, ()> for WindowState<T> {
         _qhandle: &QueueHandle<Self>,
     ) {
         match event {
-            xdg_popup::Event::Configure { width, height, .. } => {
+            xdg_popup::Event::Configure {
+                x,
+                y,
+                width,
+                height,
+            } => {
                 let Some(unit_index) = state.units.iter().position(|unit| unit.shell == *surface)
                 else {
                     return;
                 };
+                state.units[unit_index].popup_position = (x, y);
                 state.units[unit_index].size = state.units[unit_index]
                     .popup_surface_geometry
                     .map_or((width as u32, height as u32), |(_, capacity)| capacity);
@@ -2448,13 +2492,23 @@ impl<T> Dispatch<WpPresentationFeedback, (id::Id, std::time::Instant)> for Windo
                 },
             ));
         }
+        if matches!(event, wp_presentation_feedback::Event::Discarded)
+            && state.get_unit_with_id(data.0).is_some()
+        {
+            state.message.push((
+                Some(data.0),
+                DispatchMessageInner::PresentationDiscarded {
+                    content_updated_at: data.1,
+                },
+            ));
+        }
     }
 }
 
 impl<T> Dispatch<WlCallback, (id::Id, PresentAvailableState)> for WindowState<T> {
     fn event(
         state: &mut Self,
-        _proxy: &WlCallback,
+        proxy: &WlCallback,
         event: <WlCallback as Proxy>::Event,
         data: &(id::Id, PresentAvailableState),
         _conn: &Connection,
@@ -2462,6 +2516,7 @@ impl<T> Dispatch<WlCallback, (id::Id, PresentAvailableState)> for WindowState<T>
     ) {
         if let WlCallbackEvent::Done { callback_data: _ } = event
             && let Some(unit) = state.get_mut_unit_with_id(data.0)
+            && unit.frame_callback.as_ref() == Some(proxy)
         {
             unit.frame_callback = None;
             unit.present_available_state = data.1;
@@ -2494,6 +2549,8 @@ impl<T> Dispatch<ExtSessionLockV1, ()> for WindowState<T> {
 }
 
 delegate_noop!(@<T> WindowState<T>: ignore WlCompositor); // WlCompositor is need to create a surface
+delegate_noop!(@<T> WindowState<T>: ignore WlSubcompositor);
+delegate_noop!(@<T> WindowState<T>: ignore WlSubsurface);
 delegate_noop!(@<T> WindowState<T>: ignore WlOutput); // output is need to place layer_shell, although here
 // it is not used
 delegate_noop!(@<T> WindowState<T>: ignore WlShm); // shm is used to create buffer pool
@@ -2565,6 +2622,7 @@ impl<T: 'static> WindowState<T> {
         }
         self.seat_state = Some(seat_state);
         let wmcompositer = globals.bind::<WlCompositor, _, _>(&qh, 1..=5, ())?;
+        self.subcompositor = globals.bind::<WlSubcompositor, _, _>(&qh, 1..=1, ()).ok();
         self.background_effect_manager = globals
             .bind::<ExtBackgroundEffectManagerV1, _, _>(&qh, 1..=1, ())
             .ok();
@@ -2834,7 +2892,7 @@ impl<T: 'static> WindowState<T> {
         let connection = self.connection.take().unwrap();
         let mut init_event = None;
         let wmbase = self.wmbase.take().unwrap();
-        let viewporter = self.viewporter.take();
+        let viewporter = self.viewporter.clone();
         let zxdg_decoration_manager = self.xdg_decoration_manager.take();
 
         let cursor_update_context = CursorUpdateContext {
@@ -3136,6 +3194,12 @@ impl<T: 'static> WindowState<T> {
                 }
             }
 
+            if window_state
+                .owner_wakeup
+                .is_some_and(|at| at <= Instant::now())
+            {
+                window_state.owner_wakeup = None;
+            }
             window_state.handle_event(&mut *event_handler, ExWlShellEvent::NormalDispatch, None);
             loop {
                 let mut return_data = vec![];

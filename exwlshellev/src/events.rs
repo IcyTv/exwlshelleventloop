@@ -285,6 +285,9 @@ pub enum Ime {
 #[allow(unused)]
 #[derive(Debug, Clone)]
 pub(crate) enum DispatchMessageInner {
+    PresentationDiscarded {
+        content_updated_at: std::time::Instant,
+    },
     Presented {
         content_updated_at: std::time::Instant,
     },
@@ -373,6 +376,10 @@ pub(crate) enum DispatchMessageInner {
 /// This tell the DispatchMessage by dispatch
 #[derive(Debug)]
 pub enum DispatchMessage {
+    /// The compositor discarded a requested submission; it did not become visible.
+    PresentationDiscarded {
+        content_updated_at: std::time::Instant,
+    },
     /// The compositor displayed a submission built from this content snapshot.
     Presented {
         content_updated_at: std::time::Instant,
@@ -485,6 +492,9 @@ pub enum DispatchMessage {
 impl From<DispatchMessageInner> for DispatchMessage {
     fn from(val: DispatchMessageInner) -> Self {
         match val {
+            DispatchMessageInner::PresentationDiscarded { content_updated_at } => {
+                DispatchMessage::PresentationDiscarded { content_updated_at }
+            }
             DispatchMessageInner::Presented { content_updated_at } => {
                 DispatchMessage::Presented { content_updated_at }
             }

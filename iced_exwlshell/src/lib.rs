@@ -7,6 +7,7 @@ mod conversion;
 mod error;
 mod event;
 mod multi_window;
+pub mod popup_animation;
 mod proxy;
 pub mod redraw;
 mod user_interface;

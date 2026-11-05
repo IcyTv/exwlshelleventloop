@@ -67,6 +67,9 @@ pub struct Settings {
     /// dropping it. Avoids cold-start delay at the cost of idle GPU/RAM.
     /// Defaults to `true`. Useful for daemons that show surfaces rarely.
     pub keep_compositor_alive: bool,
+    /// Render popups on input-empty visual hosts and retain them through exit.
+    /// Requires a compositor supporting immutable GPU frames. Opt-in per daemon.
+    pub popup_transitions: Option<crate::popup_animation::Profile>,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -81,6 +84,7 @@ impl Default for Settings {
             with_connection: None,
             shell_broadcast: shell::channel().0,
             keep_compositor_alive: true,
+            popup_transitions: None,
         }
     }
 }

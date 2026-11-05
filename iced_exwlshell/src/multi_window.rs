@@ -52,8 +52,48 @@ use std::{
 };
 use window_manager::Window;
 
+mod popup_visuals;
 mod state;
 mod window_manager;
+
+struct EnableSurfaceTransition;
+struct FocusVisibility {
+    pose: crate::popup_animation::Pose,
+    hidden: bool,
+}
+impl iced_core::widget::Operation for FocusVisibility {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn iced_core::widget::Operation)) {
+        operate(self);
+    }
+    fn focusable(
+        &mut self,
+        _: Option<&iced_core::widget::Id>,
+        bounds: iced_core::Rectangle,
+        state: &mut dyn iced_core::widget::operation::Focusable,
+    ) {
+        let visible = self.pose.visible_bounds(bounds);
+        if state.is_focused() && (visible.width <= 0.0 || visible.height <= 0.0) {
+            self.hidden = true;
+        }
+    }
+}
+impl iced_core::widget::Operation for EnableSurfaceTransition {
+    fn traverse(&mut self, operate: &mut dyn FnMut(&mut dyn iced_core::widget::Operation)) {
+        operate(self);
+    }
+    fn custom(
+        &mut self,
+        id: Option<&iced_core::widget::Id>,
+        _: iced_core::Rectangle,
+        state: &mut dyn std::any::Any,
+    ) {
+        if id == Some(&iced_core::widget::Id::new("exwlshell.popup.grow")) {
+            if let Some(enabled) = state.downcast_mut::<bool>() {
+                *enabled = true;
+            }
+        }
+    }
+}
 
 type MultiRuntime<E, Message> = Runtime<E, IcedProxy<Action<Message>>, Action<Message>>;
 
@@ -230,6 +270,7 @@ where
         system_theme,
         proxy_back,
         settings.keep_compositor_alive,
+        settings.popup_transitions,
         redraw_policy,
     )
     .lock(lock);
@@ -352,6 +393,8 @@ where
     time: Instant,
     keep_compositor_alive: bool,
     redraw_policy: Policy<P::Message>,
+    popup_transitions: Option<crate::popup_animation::Profile>,
+    visuals: HashMap<LayerShellId, popup_visuals::Visual<C>>,
 }
 
 impl<P, E, C> Context<P, E, C>
@@ -374,6 +417,7 @@ where
         system_theme: iced_core::theme::Mode,
         proxy: IcedProxy<Action<P::Message>>,
         keep_compositor_alive: bool,
+        popup_transitions: Option<crate::popup_animation::Profile>,
         redraw_policy: Policy<P::Message>,
     ) -> Self {
         Self {
@@ -398,6 +442,8 @@ where
             proxy,
             time: Instant::now(),
             redraw_policy,
+            popup_transitions,
+            visuals: HashMap::new(),
         }
     }
 
@@ -417,6 +463,7 @@ where
         window: &mut Window<P, C>,
         measure_popup: bool,
     ) {
+        window.interaction_epoch = window.interaction_epoch.wrapping_add(1);
         let build_size = if measure_popup {
             Size::new(4096.0, 4096.0)
         } else {
@@ -441,6 +488,7 @@ where
         let capacity = scaled_popup_size(ui.min_size(), scale);
         let mut geometry = PopupWindowGeometry::default();
         ui.operate(&window.renderer.borrow(), &mut geometry);
+        window.popup_geometry = geometry.0;
         let rect = geometry
             .0
             .map(|bounds| scaled_popup_geometry(bounds, scale));
@@ -546,7 +594,7 @@ where
                 self.handle_closed_event(ev, layer_shell_id)
             }
             IcedWlShellEvent::Window(window_event) => {
-                self.handle_window_event(layer_shell_id, window_event)
+                self.handle_window_event(ev, layer_shell_id, window_event)
             }
             IcedWlShellEvent::UserAction(user_action) => self.handle_user_action(ev, user_action),
             IcedWlShellEvent::NormalDispatch => self.handle_normal_dispatch(ev),
@@ -570,6 +618,28 @@ where
         ev: &mut WindowState<IcedId>,
         layer_shell_id: Option<LayerShellId>,
     ) {
+        if let Some(id) = layer_shell_id {
+            if let Some(visual) = self.visuals.get(&id) {
+                if let Some(native) = visual.native {
+                    if visual.pending.is_some() && !visual.finished {
+                        self.draw_retained_visual(ev, id);
+                    } else {
+                        self.handle_refresh_event(ev, Some(native));
+                    }
+                } else {
+                    self.draw_retained_visual(ev, id);
+                }
+                return;
+            }
+            if let Some(visual) = self.visuals.values_mut().find(|v| v.native == Some(id)) {
+                if visual.pending.is_some() {
+                    return;
+                }
+                // Drawing can mutate retained layout/gesture state without an
+                // application view rebuild. Old pixels must not authorize it.
+                visual.confirmed = None;
+            }
+        }
         let Some(ex_wlshell_window) = layer_shell_id.and_then(|lid| ev.get_unit_with_id(lid))
         else {
             return;
@@ -618,6 +688,7 @@ where
                     exwlshellev::WlShellType::XdgTopLevel => shell::ShellType::XdgTopLevel,
                     exwlshellev::WlShellType::InputPanel => shell::ShellType::InputPanel,
                     exwlshellev::WlShellType::SessionLock => shell::ShellType::SessionLock,
+                    exwlshellev::WlShellType::Visual => return,
                 };
                 let info = shell::ShellInfo {
                     window: iced_id,
@@ -703,6 +774,8 @@ where
                 }
 
                 window.popup_settings = self.pending_popup_settings.remove(&iced_id);
+                window.visual_popup =
+                    self.popup_transitions.is_some() && window.popup_settings.is_some();
 
                 Self::build_user_interface(
                     ev,
@@ -727,16 +800,47 @@ where
             .expect("The compositor should have been created");
 
         let content_updated_at = self.user_interfaces.content_updated_at(&iced_id);
+        window.interaction_epoch = window.interaction_epoch.wrapping_add(1);
         let mut ui = self
             .user_interfaces
             .ui_mut(&iced_id)
             .expect("Get User interface");
 
-        let cursor = if ev.is_mouse_surface(unit_id) {
+        if self.popup_transitions.is_some() && window.popup_settings.is_some() {
+            ui.operate(&window.renderer.borrow(), &mut EnableSurfaceTransition);
+        }
+
+        let mut cursor = if ev.is_mouse_surface(unit_id) {
             window.state.cursor()
         } else {
             Cursor::Unavailable
         };
+        let sampled_pose = self
+            .visuals
+            .values()
+            .find(|v| v.native == Some(unit_id))
+            .map(|visual| {
+                let bounds =
+                    iced_core::Rectangle::with_size(window.state.viewport().logical_size());
+                let sample = visual.timeline.sample(Instant::now(), bounds);
+                let placement = ev
+                    .popup_visual_placement(unit_id)
+                    .unwrap_or(visual.placement);
+                let source = visual.pointer_placement.unwrap_or(placement);
+                let scale = window.state.application_scale_factor() as f32;
+                let translation = crate::popup_animation::rebase_input(
+                    source.origin,
+                    placement.origin,
+                    visual.pointer_scale.unwrap_or(scale as f64),
+                    scale as f64,
+                );
+                cursor = if sample.0.accepts_input() {
+                    cursor * translation * sample.0.transformation.inverse()
+                } else {
+                    Cursor::Unavailable
+                };
+                sample
+            });
 
         events.push(IcedEvent::Window(IcedWindowEvent::RedrawRequested(
             Instant::now(),
@@ -816,8 +920,223 @@ where
         }
 
         if is_new_window {
+            if self.popup_transitions.is_some() && window.popup_settings.is_some() {
+                if let Some(unit) = ev.get_unit_with_id(unit_id) {
+                    unit.set_visual_input_region(&[]);
+                }
+            }
             tracing::debug!(?iced_id, "skipping first present for new window");
             ev.request_refresh(layer_shell_id, RefreshRequest::NextFrame);
+            return;
+        }
+
+        if let Some(profile) = self
+            .popup_transitions
+            .filter(|_| window.popup_settings.is_some())
+        {
+            assert!(
+                compositor.supports_frames(),
+                "popup transitions require immutable compositor frames"
+            );
+            assert!(
+                ev.supports_presentation(),
+                "popup transitions require presentation feedback"
+            );
+            let Some(placement) = ev.popup_visual_placement(unit_id) else {
+                ev.request_refresh(unit_id, RefreshRequest::NextFrame);
+                return;
+            };
+            let existing = self
+                .visuals
+                .iter()
+                .find(|(_, v)| v.native == Some(unit_id))
+                .map(|(id, _)| *id);
+            let visual_id = if let Some(id) = existing {
+                id
+            } else {
+                let settings = window.popup_settings.expect("popup settings");
+                let reusable = self
+                    .visuals
+                    .iter()
+                    .find(|(_, v)| {
+                        v.native.is_none()
+                            && v.placement == placement
+                            && v.settings.parent == settings.parent
+                            && v.settings.placement == settings.placement
+                            && v.viewport.scale_factor() == window.state.viewport().scale_factor()
+                            && v.viewport.logical_size() == window.state.viewport().logical_size()
+                    })
+                    .map(|(id, _)| *id);
+                if let Some(id) = reusable {
+                    let visual = self.visuals.get_mut(&id).expect("visual");
+                    visual.native = Some(unit_id);
+                    visual.owner = iced_id;
+                    visual.settings = settings;
+                    visual.timeline.retarget(visual.pose, false);
+                    visual.finished = false;
+                    visual.retire_deadline = None;
+                    visual.confirmed = None;
+                    visual.native_capacity = None;
+                    id
+                } else {
+                    let above = settings.parent.and_then(|parent| {
+                        self.visuals
+                            .iter()
+                            .find(|(_, v)| v.owner == parent)
+                            .map(|(id, _)| *id)
+                    });
+                    let id = ev
+                        .create_visual_host(placement, above)
+                        .expect("visual subsurface unavailable");
+                    let wrapper = ev.get_unit_with_id(id).expect("visual unit").gen_wrapper();
+                    let surface = compositor.create_surface(
+                        wrapper,
+                        physical_size.width,
+                        physical_size.height,
+                    );
+                    self.visuals.insert(
+                        id,
+                        popup_visuals::Visual::new(
+                            unit_id,
+                            iced_id,
+                            settings,
+                            surface,
+                            window.state.viewport().clone(),
+                            placement,
+                            profile,
+                        ),
+                    );
+                    id
+                }
+            };
+            let visual = self.visuals.get_mut(&visual_id).expect("visual");
+            let viewport = window.state.viewport();
+            let capacity = (physical_size.width, physical_size.height, placement.scale);
+            if visual.native_capacity != Some(capacity) {
+                let presentation = compositor::FramePresentation {
+                    transformation: iced_core::Transformation::IDENTITY,
+                    opacity: 1.0,
+                    clip: iced_core::Rectangle::with_size(viewport.logical_size()),
+                };
+                if let Err(error) = compositor.present_frame(
+                    None,
+                    presentation,
+                    &mut window.surface,
+                    viewport,
+                    || ev.request_next_present(unit_id),
+                ) {
+                    Self::recover_frame_surface(
+                        compositor,
+                        &mut window.surface,
+                        window.raw.clone(),
+                        viewport,
+                        &error,
+                    );
+                    ev.request_refresh(unit_id, RefreshRequest::NextFrame);
+                    return;
+                }
+                visual.native_capacity = Some(capacity);
+            }
+            if visual.placement != placement || visual.viewport.physical_size() != physical_size {
+                compositor.configure_surface(
+                    &mut visual.surface,
+                    physical_size.width,
+                    physical_size.height,
+                );
+            }
+            ev.configure_visual_host(visual_id, placement);
+            visual.placement = placement;
+            visual.viewport = viewport.clone();
+            visual.bounds = iced_core::Rectangle::with_size(viewport.logical_size());
+            visual.visible = window.popup_geometry.unwrap_or(visual.bounds);
+            visual.frame = compositor.capture_frame(
+                &mut window.renderer.borrow_mut(),
+                viewport,
+                window.state.background_color(),
+            );
+            visual.frame_content = content_updated_at;
+            visual.frame_epoch = window.interaction_epoch;
+            visual.frame_ime = window.ime_descriptor();
+            visual.application_scale = window.state.application_scale_factor() as f32;
+            let (pose, finished) = sampled_pose
+                .unwrap_or_else(|| visual.timeline.sample(Instant::now(), visual.bounds));
+            assert!(pose.is_valid(), "invalid popup transition pose");
+            let region = pose.visible_bounds(visual.bounds);
+            if let Some(unit) = ev.get_unit_with_id(unit_id) {
+                let scale = window.state.application_scale_factor() as f32;
+                let left = (region.x * scale).floor() as i32;
+                let top = (region.y * scale).floor() as i32;
+                let right = ((region.x + region.width) * scale).ceil() as i32;
+                let bottom = ((region.y + region.height) * scale).ceil() as i32;
+                if pose.accepts_input() {
+                    unit.set_visual_input_region(&[(left, top, right - left, bottom - top)]);
+                } else {
+                    unit.set_visual_input_region(&[]);
+                }
+                unit.get_wlsurface().commit();
+            }
+            let stamp = Instant::now();
+            let presentation = compositor::FramePresentation {
+                transformation: pose.transformation,
+                opacity: pose.opacity,
+                clip: pose.clip,
+            };
+            match compositor.present_frame(
+                visual.frame.as_ref(),
+                presentation,
+                &mut visual.surface,
+                viewport,
+                || {
+                    ev.request_next_present(visual_id);
+                    ev.request_presentation(visual_id, stamp);
+                },
+            ) {
+                Ok(()) => {
+                    visual.pose = pose;
+                    visual.finished = finished;
+                    visual.timeline.started.get_or_insert(Instant::now());
+                    visual.pending = Some(popup_visuals::Submission {
+                        stamp,
+                        content: content_updated_at.unwrap_or(stamp),
+                        pose,
+                        placement,
+                        epoch: window.interaction_epoch,
+                        ime: visual.frame_ime.map(|(cursor, purpose)| {
+                            (
+                                (cursor * pose.transformation) * visual.application_scale,
+                                purpose,
+                            )
+                        }),
+                    });
+                    ev.request_owner_wakeup(stamp + Duration::from_millis(100));
+                    tracing::debug!(
+                        ?iced_id,
+                        ?visual_id,
+                        ?stamp,
+                        ?pose,
+                        "popup visual submitted"
+                    );
+                    if !finished {
+                        ev.request_refresh(visual_id, RefreshRequest::NextFrame);
+                    }
+                }
+                Err(error) => {
+                    if let Some(unit) = ev.get_unit_with_id(visual_id) {
+                        Self::recover_frame_surface(
+                            compositor,
+                            &mut visual.surface,
+                            unit.gen_wrapper(),
+                            viewport,
+                            &error,
+                        );
+                    }
+                    visual.timeline.retarget(visual.pose, false);
+                    ev.request_refresh(
+                        visual_id,
+                        RefreshRequest::At(Instant::now() + Duration::from_millis(16)),
+                    );
+                }
+            }
             return;
         }
 
@@ -878,11 +1197,139 @@ where
         }
     }
 
+    fn recover_frame_surface(
+        compositor: &mut C,
+        surface: &mut C::Surface,
+        wrapper: Arc<WindowWrapper>,
+        viewport: &iced_graphics::Viewport,
+        error: &compositor::SurfaceError,
+    ) {
+        let size = viewport.physical_size();
+        match present_recovery(error) {
+            PresentRecovery::Recreate => {
+                *surface = compositor.create_surface(wrapper, size.width, size.height);
+            }
+            PresentRecovery::Reconfigure => {
+                compositor.configure_surface(surface, size.width, size.height)
+            }
+            PresentRecovery::Fatal => panic!("{error:?}"),
+            PresentRecovery::Report => {}
+        }
+    }
+
+    fn draw_retained_visual(&mut self, ev: &mut WindowState<IcedId>, id: LayerShellId) {
+        let Some(visual) = self.visuals.get_mut(&id) else {
+            return;
+        };
+        // No widget state changes while replaying an immutable frame. Frame
+        // callbacks can pace its pose even while presentation proof is delayed.
+        visual.pending = None;
+        let Some(compositor) = &mut self.compositor else {
+            return;
+        };
+        if visual.frame.is_none() {
+            ev.request_close(id);
+            return;
+        }
+        let (pose, finished) = visual.timeline.sample(Instant::now(), visual.bounds);
+        assert!(pose.is_valid(), "invalid popup exit pose");
+        let stamp = Instant::now();
+        let presentation = compositor::FramePresentation {
+            transformation: pose.transformation,
+            opacity: pose.opacity,
+            clip: pose.clip,
+        };
+        if let Some(native) = visual.native {
+            if ev.popup_visual_placement(native) == Some(visual.placement) {
+                if let Some(unit) = ev.get_unit_with_id(native) {
+                    let scale =
+                        visual.viewport.scale_factor() / (visual.placement.scale as f32 / 120.0);
+                    let region = pose.visible_bounds(visual.bounds);
+                    let left = (region.x * scale).floor() as i32;
+                    let top = (region.y * scale).floor() as i32;
+                    let right = ((region.x + region.width) * scale).ceil() as i32;
+                    let bottom = ((region.y + region.height) * scale).ceil() as i32;
+                    if pose.accepts_input() {
+                        unit.set_visual_input_region(&[(left, top, right - left, bottom - top)]);
+                    } else {
+                        unit.set_visual_input_region(&[]);
+                    }
+                    unit.get_wlsurface().commit();
+                }
+            }
+        }
+        match compositor.present_frame(
+            visual.frame.as_ref(),
+            presentation,
+            &mut visual.surface,
+            &visual.viewport,
+            || {
+                ev.request_next_present(id);
+                ev.request_presentation(id, stamp);
+            },
+        ) {
+            Ok(()) => {
+                visual.pose = pose;
+                visual.finished = finished;
+                visual.timeline.started.get_or_insert(Instant::now());
+                visual.pending = Some(popup_visuals::Submission {
+                    stamp,
+                    content: visual.frame_content.unwrap_or(stamp),
+                    pose,
+                    placement: visual.placement,
+                    epoch: visual.frame_epoch,
+                    ime: visual.frame_ime.map(|(cursor, purpose)| {
+                        (
+                            (cursor * pose.transformation) * visual.application_scale,
+                            purpose,
+                        )
+                    }),
+                });
+                ev.request_owner_wakeup(stamp + Duration::from_millis(100));
+                if !finished {
+                    ev.request_refresh(id, RefreshRequest::NextFrame);
+                }
+            }
+            Err(error) => {
+                if let Some(unit) = ev.get_unit_with_id(id) {
+                    Self::recover_frame_surface(
+                        compositor,
+                        &mut visual.surface,
+                        unit.gen_wrapper(),
+                        &visual.viewport,
+                        &error,
+                    );
+                }
+                visual
+                    .timeline
+                    .retarget(visual.pose, visual.native.is_none());
+                ev.request_refresh(
+                    id,
+                    RefreshRequest::At(Instant::now() + Duration::from_millis(16)),
+                );
+            }
+        }
+    }
+
     fn handle_closed_event(
         &mut self,
         ev: &mut WindowState<IcedId>,
         layer_shell_id: Option<LayerShellId>,
     ) {
+        if let Some(id) = layer_shell_id {
+            if self.visuals.remove(&id).is_some() {
+                return;
+            }
+            if let Some((visual_id, visual)) =
+                self.visuals.iter_mut().find(|(_, v)| v.native == Some(id))
+            {
+                visual.close();
+                ev.request_refresh(*visual_id, RefreshRequest::NextFrame);
+                if let Some(deadline) = visual.retire_deadline {
+                    ev.request_owner_wakeup(deadline);
+                }
+            }
+        }
         let Some(iced_id) = layer_shell_id.and_then(|lid| {
             self.window_manager
                 .get_alias(lid)
@@ -913,9 +1360,102 @@ where
 
     fn handle_window_event(
         &mut self,
+        ev: &mut WindowState<IcedId>,
         layer_shell_id: Option<LayerShellId>,
         event: ExwlShellWindowEvent,
     ) {
+        if let Some(id) = layer_shell_id {
+            if let Some(visual) = self.visuals.get_mut(&id) {
+                if let ExwlShellWindowEvent::PresentationDiscarded { content_updated_at } = &event {
+                    if visual
+                        .pending
+                        .as_ref()
+                        .is_some_and(|submission| submission.stamp == *content_updated_at)
+                    {
+                        visual.pending = None;
+                        visual.confirmed = None;
+                        ev.retry_visual_present(id);
+                        ev.request_refresh(id, RefreshRequest::NextFrame);
+                    }
+                    return;
+                }
+                if let ExwlShellWindowEvent::Presented { content_updated_at } = event {
+                    if visual
+                        .pending
+                        .as_ref()
+                        .is_some_and(|submission| submission.stamp == content_updated_at)
+                    {
+                        visual.confirmed = visual.pending.take();
+                        tracing::debug!(
+                            "POPUP_PRESENTED owner={:?} host={:?} closing={} scale={} tx={} ty={} width={} height={} x={} y={} gx={} gy={} gw={} gh={}",
+                            visual.owner,
+                            id,
+                            visual.native.is_none(),
+                            visual.pose.transformation.scale_factor(),
+                            visual.pose.transformation.translation().x,
+                            visual.pose.transformation.translation().y,
+                            visual.bounds.width,
+                            visual.bounds.height,
+                            visual.placement.origin.0,
+                            visual.placement.origin.1,
+                            visual.visible.x,
+                            visual.visible.y,
+                            visual.visible.width,
+                            visual.visible.height
+                        );
+                        if let Some(submission) = &visual.confirmed {
+                            if let Some(window) = self.window_manager.get_mut(visual.owner) {
+                                window.popup_pose = Some(submission.pose);
+                                if visual.native.is_some()
+                                    && (window.interaction_epoch != submission.epoch
+                                        || self.user_interfaces.content_updated_at(&visual.owner)
+                                            != Some(submission.content))
+                                {
+                                    ev.request_refresh(window.id, RefreshRequest::NextFrame);
+                                }
+                                if ev.keyboard_focus_id() == visual.native
+                                    && visual.native.is_some()
+                                {
+                                    let enabled = submission.ime.is_some();
+                                    if ev.ime_allowed() != enabled {
+                                        ev.set_ime_allowed(enabled);
+                                    }
+                                    if let Some((cursor, purpose)) = submission.ime {
+                                        ev.set_ime_purpose(conversion::ime_purpose(purpose));
+                                        ev.set_ime_cursor_area(
+                                            exwlshellev::dpi::LogicalPosition::new(
+                                                cursor.x, cursor.y,
+                                            ),
+                                            exwlshellev::dpi::LogicalSize {
+                                                width: cursor.width,
+                                                height: cursor.height,
+                                            },
+                                            window.id,
+                                        );
+                                    }
+                                }
+                            }
+                            if visual.native.is_some() {
+                                self.shell_broadcast.send(shell::ShellEvent::Presented {
+                                    window: visual.owner,
+                                    content_updated_at: submission.content,
+                                });
+                            }
+                        }
+                        if visual.native.is_none() && visual.finished {
+                            ev.request_close(id);
+                        } else if !visual.finished {
+                            ev.request_refresh(id, RefreshRequest::NextFrame);
+                        } else if let Some(native) = visual.native {
+                            ev.request_refresh(native, RefreshRequest::Wait);
+                        }
+                    }
+                }
+                let owner = visual.owner;
+                self.dispatch_visual_input(ev, owner);
+                return;
+            }
+        }
         match &event {
             ExwlShellWindowEvent::OutputAdded(info) => {
                 self.shell_broadcast
@@ -979,11 +1519,242 @@ where
             window.state.application_scale_factor(),
             window.state.modifiers(),
         ) {
-            self.iced_events.push((iced_id, event));
+            if self.popup_transitions.is_some() && window.popup_settings.is_some() {
+                let native = window.id;
+                let cursor = window.state.cursor();
+                if let Some(visual) = self.visuals.values_mut().find(|v| v.native == Some(native)) {
+                    let event = match event {
+                        IcedEvent::Mouse(iced_core::mouse::Event::WheelScrolled { delta }) => {
+                            let native_scale = window.state.wayland_scale_factor() as f32;
+                            let pointer_scale = visual
+                                .pointer_scale
+                                .unwrap_or(window.state.application_scale_factor())
+                                as f32;
+                            let delta = match delta {
+                                iced_core::mouse::ScrollDelta::Pixels { x, y } => {
+                                    iced_core::mouse::ScrollDelta::Pixels {
+                                        x: x / native_scale / pointer_scale,
+                                        y: y / native_scale / pointer_scale,
+                                    }
+                                }
+                                iced_core::mouse::ScrollDelta::Lines { x, y } => {
+                                    iced_core::mouse::ScrollDelta::Lines {
+                                        x: x / native_scale,
+                                        y: y / native_scale,
+                                    }
+                                }
+                            };
+                            IcedEvent::Mouse(iced_core::mouse::Event::WheelScrolled { delta })
+                        }
+                        event => event,
+                    };
+                    if matches!(
+                        event,
+                        IcedEvent::Mouse(
+                            iced_core::mouse::Event::CursorEntered
+                                | iced_core::mouse::Event::CursorMoved { .. }
+                        ) | IcedEvent::Touch(_)
+                    ) {
+                        visual.pointer_placement = Some(visual.placement);
+                        visual.pointer_scale = Some(window.state.application_scale_factor());
+                    }
+                    let motion = matches!(
+                        event,
+                        IcedEvent::Mouse(iced_core::mouse::Event::CursorMoved { .. })
+                    );
+                    if motion
+                        && visual.inputs.back().is_some_and(|input| {
+                            matches!(
+                                input.event,
+                                IcedEvent::Mouse(iced_core::mouse::Event::CursorMoved { .. })
+                            )
+                        })
+                    {
+                        visual.inputs.pop_back();
+                    }
+                    if visual.inputs.len() >= 256 {
+                        visual.inputs.clear();
+                        visual.inputs.push_back(popup_visuals::Input {
+                            event: IcedEvent::Window(IcedWindowEvent::Unfocused),
+                            cursor: Cursor::Unavailable,
+                            placement: None,
+                            application_scale: window.state.application_scale_factor(),
+                        });
+                    } else {
+                        // This is the last committed native buffer placement,
+                        // not a position proposed by an unacked configure.
+                        let spatial = matches!(event, IcedEvent::Mouse(_) | IcedEvent::Touch(_));
+                        visual.inputs.push_back(popup_visuals::Input {
+                            event,
+                            cursor: if spatial { cursor } else { Cursor::Unavailable },
+                            placement: if spatial {
+                                visual.pointer_placement.or(Some(visual.placement))
+                            } else {
+                                Some(visual.placement)
+                            },
+                            application_scale: if spatial {
+                                visual
+                                    .pointer_scale
+                                    .unwrap_or(window.state.application_scale_factor())
+                            } else {
+                                window.state.application_scale_factor()
+                            },
+                        });
+                    }
+                }
+                self.dispatch_visual_input(ev, iced_id);
+            } else {
+                self.iced_events.push((iced_id, event));
+            }
         }
     }
 
+    fn dispatch_visual_input(&mut self, ev: &mut WindowState<IcedId>, iced_id: IcedId) {
+        let Some(window) = self.window_manager.get_mut(iced_id) else {
+            return;
+        };
+        let content = self.user_interfaces.content_updated_at(&iced_id);
+        let Some(visual) = self
+            .visuals
+            .values_mut()
+            .find(|v| v.native == Some(window.id))
+        else {
+            return;
+        };
+        if visual.inputs.is_empty() {
+            return;
+        }
+        if !visual.ready(
+            content,
+            ev.popup_visual_placement(window.id),
+            window.interaction_epoch,
+        ) {
+            if visual.pending.is_none() {
+                ev.request_refresh(window.id, RefreshRequest::NextFrame);
+            }
+            return;
+        }
+        let input = visual.inputs.pop_front().expect("queued popup input");
+        let pose = visual.confirmed.as_ref().expect("confirmed frame").pose;
+        let mut matching = input.placement.is_some_and(|placement| {
+            placement.root == visual.placement.root
+                && placement.root_epoch == visual.placement.root_epoch
+                && placement.scale == visual.placement.scale
+        }) && pose.accepts_input();
+        let scale = window.state.application_scale_factor() as f32;
+        let source = input.placement.unwrap_or(visual.placement);
+        let translation = crate::popup_animation::rebase_input(
+            source.origin,
+            visual.placement.origin,
+            input.application_scale,
+            scale as f64,
+        );
+        let adjusted = crate::popup_animation::Pose {
+            transformation: translation.inverse(),
+            ..pose
+        };
+        let mut event = crate::popup_animation::map_event(input.event.clone(), adjusted);
+        match &event {
+            IcedEvent::Touch(iced_core::touch::Event::FingerPressed { position, .. })
+                if !pose.clip.contains(*position) =>
+            {
+                matching = false
+            }
+            IcedEvent::Touch(iced_core::touch::Event::FingerLifted { id, position })
+                if !pose.clip.contains(*position) =>
+            {
+                event = IcedEvent::Touch(iced_core::touch::Event::FingerLost {
+                    id: *id,
+                    position: *position,
+                })
+            }
+            IcedEvent::Keyboard(_) | IcedEvent::InputMethod(_) | IcedEvent::Clipboard(_) => {
+                let mut focus = FocusVisibility {
+                    pose,
+                    hidden: false,
+                };
+                self.user_interfaces
+                    .ui_mut(&iced_id)
+                    .expect("popup UI")
+                    .operate(&window.renderer.borrow(), &mut focus);
+                matching &= !focus.hidden;
+            }
+            _ => {}
+        }
+        let events = if matching {
+            vec![crate::popup_animation::map_event(event, pose)]
+        } else {
+            // Reconfiguration/overflow invalidates the sequence, including any
+            // held capture. Never apply old local coordinates to a new geometry.
+            vec![
+                IcedEvent::Mouse(iced_core::mouse::Event::CursorLeft),
+                IcedEvent::Window(IcedWindowEvent::Unfocused),
+            ]
+        };
+        let raw_cursor = input.cursor * translation;
+        let cursor = if matching
+            && raw_cursor
+                .position()
+                .is_some_and(|position| pose.clip.contains(position))
+        {
+            raw_cursor * pose.transformation.inverse()
+        } else {
+            Cursor::Unavailable
+        };
+        tracing::debug!(?input.event,matching,?input.placement,?visual.placement,?cursor,"popup input dispatch");
+        window.interaction_epoch = window.interaction_epoch.wrapping_add(1);
+        let (state, statuses) = self
+            .user_interfaces
+            .ui_mut(&iced_id)
+            .expect("popup UI")
+            .update(
+                window.raw.as_ref(),
+                &window.waker,
+                &events,
+                cursor,
+                &mut window.renderer.borrow_mut(),
+                &mut self.messages,
+            );
+        let status = if matching {
+            statuses
+                .first()
+                .copied()
+                .unwrap_or(iced_core::event::Status::Ignored)
+        } else {
+            iced_core::event::Status::Ignored
+        };
+        visual.confirmed = None;
+        let rebuild = Self::handle_ui_state(ev, window, state, false, true);
+        if rebuild {
+            if let Some(cache) = self.user_interfaces.remove(&iced_id) {
+                Self::build_user_interface(
+                    ev,
+                    &mut self.user_interfaces,
+                    iced_id,
+                    cache,
+                    window,
+                    true,
+                );
+            }
+        }
+        ev.request_refresh(window.id, RefreshRequest::NextFrame);
+        self.runtime
+            .broadcast(iced_futures::subscription::Event::Interaction {
+                window: iced_id,
+                event: input.event,
+                status,
+            });
+    }
+
     fn handle_user_action(&mut self, ev: &mut WindowState<IcedId>, action: Action<P::Message>) {
+        if matches!(&action, Action::Widget(_) | Action::Reload) {
+            for (_, window) in self.window_manager.iter_mut() {
+                window.interaction_epoch = window.interaction_epoch.wrapping_add(1);
+            }
+            for visual in self.visuals.values_mut() {
+                visual.confirmed = None;
+            }
+        }
         let mut should_exit = false;
         run_action(
             &mut self.user_interfaces,
@@ -1153,6 +1924,33 @@ where
                 let Some(parent_layer_id) = parent_layer_id else {
                     return;
                 };
+                if let Some((parent_id, parent)) = self.window_manager.get_alias(parent_layer_id) {
+                    if let Some(visual) = self
+                        .visuals
+                        .values()
+                        .find(|v| v.native == Some(parent_layer_id))
+                    {
+                        if !visual.ready(
+                            self.user_interfaces.content_updated_at(&parent_id),
+                            ev.popup_visual_placement(parent_layer_id),
+                            parent.interaction_epoch,
+                        ) {
+                            ev.request_refresh(parent_layer_id, RefreshRequest::NextFrame);
+                            let settings = IcedNewPopupSettings {
+                                parent: Some(parent_id),
+                                ..settings
+                            };
+                            self.waiting_layer_shell_actions.push((
+                                None,
+                                ExwlShellCustomAction::NewPopUp {
+                                    settings,
+                                    id: iced_id,
+                                },
+                            ));
+                            return;
+                        }
+                    }
+                }
                 let parent_scale = match settings.parent {
                     Some(parent_id) => self
                         .window_manager
@@ -1165,6 +1963,53 @@ where
                 }
                 .unwrap_or(1.0);
 
+                let mut settings = settings;
+                if self.popup_transitions.is_some() {
+                    if let Some((_, parent)) = self.window_manager.get_alias(parent_layer_id) {
+                        if let Some(pose) = parent.popup_pose {
+                            let geometry = parent.popup_geometry.unwrap_or_default();
+                            let map = |bounds: iced_core::Rectangle| {
+                                let mut bounds = bounds * pose.transformation;
+                                bounds.x -= geometry.x;
+                                bounds.y -= geometry.y;
+                                bounds
+                            };
+                            settings.placement = match settings.placement {
+                                PopupPlacement::Anchored {
+                                    position: (x, y),
+                                    size,
+                                } => {
+                                    let (w, h) = size.to_set();
+                                    let rect = map(iced_core::Rectangle {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        width: w as f32,
+                                        height: h as f32,
+                                    });
+                                    PopupPlacement::Anchored {
+                                        position: (rect.x.round() as i32, rect.y.round() as i32),
+                                        size: PixelSize::px(
+                                            rect.width.round().max(1.0) as u32,
+                                            rect.height.round().max(1.0) as u32,
+                                        ),
+                                    }
+                                }
+                                PopupPlacement::Position((x, y)) => {
+                                    let rect = map(iced_core::Rectangle {
+                                        x: x as f32,
+                                        y: y as f32,
+                                        width: 1.0,
+                                        height: 1.0,
+                                    });
+                                    PopupPlacement::Position((
+                                        rect.x.round() as i32,
+                                        rect.y.round() as i32,
+                                    ))
+                                }
+                            };
+                        }
+                    }
+                }
                 let scaled_settings = settings.scale(parent_scale);
                 self.pending_popup_settings.insert(iced_id, scaled_settings);
 
@@ -1245,13 +2090,39 @@ where
                 else {
                     return;
                 };
-                let Some((_, window)) = self.window_manager.get_alias(parent_layer_shell_id) else {
+                let Some((parent_iced_id, window)) =
+                    self.window_manager.get_alias(parent_layer_shell_id)
+                else {
                     return;
                 };
-                let Some(point) = window.state.mouse_position() else {
+                let Some(point) = window.state.mouse_position().copied() else {
                     return;
                 };
                 let scale = window.state.application_scale_factor();
+                let point = if self.popup_transitions.is_some() {
+                    let mut point = point;
+                    if let Some(visual) = self
+                        .visuals
+                        .values()
+                        .find(|v| v.native == Some(parent_layer_shell_id))
+                    {
+                        let source = visual.pointer_placement.unwrap_or(visual.placement);
+                        point = point
+                            * crate::popup_animation::rebase_input(
+                                source.origin,
+                                visual.placement.origin,
+                                visual.pointer_scale.unwrap_or(scale),
+                                scale,
+                            );
+                    }
+                    if let Some(geometry) = window.popup_geometry {
+                        point.x -= geometry.x;
+                        point.y -= geometry.y;
+                    }
+                    point
+                } else {
+                    point
+                };
                 let (x, y) = (
                     (point.x as f64 * scale).round() as i32,
                     (point.y as f64 * scale).round() as i32,
@@ -1273,6 +2144,19 @@ where
                         | PopupConstraintAdjustment::SlideY,
                     grab_serial: None,
                 };
+                if self.popup_transitions.is_some() {
+                    self.pending_popup_settings.insert(
+                        iced_id,
+                        IcedNewPopupSettings {
+                            parent: Some(parent_iced_id),
+                            size,
+                            placement: popup_settings.placement,
+                            anchor: popup_settings.anchor,
+                            gravity: popup_settings.gravity,
+                            constraint_adjustment: popup_settings.constraint_adjustment,
+                        },
+                    );
+                }
                 let layer_shell_id = exwlshellev::id::Id::unique();
                 ev.append_return_data(ReturnData::NewPopUp((
                     popup_settings,
@@ -1298,12 +2182,94 @@ where
     }
 
     fn handle_normal_dispatch(&mut self, ev: &mut WindowState<IcedId>) {
+        let mut popup_events = Vec::new();
+        self.iced_events.retain(|(owner, event)| {
+            if self
+                .visuals
+                .values()
+                .any(|v| v.native.is_some() && v.owner == *owner)
+            {
+                popup_events.push((*owner, event.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        for (owner, event) in popup_events {
+            if let Some(window) = self.window_manager.get(owner) {
+                if let Some(visual) = self
+                    .visuals
+                    .values_mut()
+                    .find(|v| v.native == Some(window.id))
+                {
+                    visual.inputs.push_back(popup_visuals::Input {
+                        event,
+                        cursor: window.state.cursor(),
+                        placement: visual.pointer_placement.or(Some(visual.placement)),
+                        application_scale: visual
+                            .pointer_scale
+                            .unwrap_or(window.state.application_scale_factor()),
+                    });
+                }
+            }
+        }
+        let owners = self
+            .visuals
+            .values()
+            .filter(|v| v.native.is_some() && !v.inputs.is_empty())
+            .map(|v| v.owner)
+            .collect::<Vec<_>>();
+        for owner in owners {
+            self.dispatch_visual_input(ev, owner);
+        }
+        let now = Instant::now();
+        for (id, visual) in &mut self.visuals {
+            if visual.retire_deadline.is_some_and(|at| at <= now) {
+                // Output/feedback loss is not permission to retain resources
+                // forever. Native input has already been released.
+                ev.request_close(*id);
+                continue;
+            }
+            if visual
+                .pending
+                .as_ref()
+                .is_some_and(|submission| submission.stamp.elapsed() >= Duration::from_millis(100))
+            {
+                tracing::debug!(?id, "popup presentation timeout; retrying visual slot");
+                visual.pending = None;
+                visual.confirmed = None;
+                ev.retry_visual_present(*id);
+                ev.request_refresh(*id, RefreshRequest::NextFrame);
+            }
+            if let Some(submission) = &visual.pending {
+                ev.request_owner_wakeup(submission.stamp + Duration::from_millis(100));
+            }
+            if let Some(deadline) = visual.retire_deadline {
+                ev.request_owner_wakeup(deadline);
+            }
+        }
+        // Do not replace a UI borrowed from the application while its submitted
+        // visual is still awaiting presentation. Native events are dispatched
+        // individually above, using their own cursor and presented generation.
+        if self.popup_transitions.is_some()
+            && self.visuals.values().any(|v| {
+                v.native.is_some()
+                    && v.pending.as_ref().is_some_and(|submission| {
+                        submission.stamp.elapsed() < Duration::from_millis(100)
+                    })
+            })
+        {
+            return;
+        }
         if self.iced_events.is_empty() && self.messages.is_empty() {
             return;
         }
 
         let mut rebuilds = Vec::new();
         for (iced_id, window) in self.window_manager.iter_mut() {
+            if self.popup_transitions.is_some() && window.popup_settings.is_some() {
+                continue;
+            }
             let interact_span = iced_debug::interact(iced_id);
             let mut window_events = vec![];
 
@@ -1455,31 +2421,38 @@ where
 
                 if update_ime {
                     let ime_flags = window.request_input_method(input_method.clone());
-                    match input_method {
-                        iced_core::InputMethod::Disabled => {
-                            if ime_flags.contains(ImeState::Disabled) {
-                                ev.set_ime_allowed(false);
+                    if !window.visual_popup {
+                        match input_method {
+                            iced_core::InputMethod::Disabled => {
+                                if ime_flags.contains(ImeState::Disabled) {
+                                    ev.set_ime_allowed(false);
+                                }
                             }
-                        }
-                        iced_core::InputMethod::Enabled {
-                            purpose,
-                            preedit: _,
-                            cursor,
-                        } => {
-                            if ime_flags.contains(ImeState::Allowed) {
-                                ev.set_ime_allowed(true);
-                            }
+                            iced_core::InputMethod::Enabled {
+                                purpose,
+                                preedit: _,
+                                cursor,
+                            } => {
+                                if ime_flags.contains(ImeState::Allowed) {
+                                    ev.set_ime_allowed(true);
+                                }
 
-                            if ime_flags.contains(ImeState::Update) {
-                                ev.set_ime_purpose(conversion::ime_purpose(purpose));
-                                ev.set_ime_cursor_area(
-                                    exwlshellev::dpi::LogicalPosition::new(cursor.x, cursor.y),
-                                    exwlshellev::dpi::LogicalSize {
-                                        width: cursor.width,
-                                        height: cursor.height,
-                                    },
-                                    window.id,
-                                );
+                                if ime_flags.contains(ImeState::Update) {
+                                    ev.set_ime_purpose(conversion::ime_purpose(purpose));
+                                    let cursor = if window.popup_pose.is_some() {
+                                        window.presented_ime_cursor().unwrap_or(cursor)
+                                    } else {
+                                        cursor
+                                    };
+                                    ev.set_ime_cursor_area(
+                                        exwlshellev::dpi::LogicalPosition::new(cursor.x, cursor.y),
+                                        exwlshellev::dpi::LogicalSize {
+                                            width: cursor.width,
+                                            height: cursor.height,
+                                        },
+                                        window.id,
+                                    );
+                                }
                             }
                         }
                     }

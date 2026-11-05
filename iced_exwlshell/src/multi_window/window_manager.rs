@@ -32,6 +32,10 @@ where
     pub state: State<P>,
     pub mouse_interaction: mouse::Interaction,
     pub popup_settings: Option<crate::actions::IcedNewPopupSettings>,
+    pub popup_pose: Option<crate::popup_animation::Pose>,
+    pub popup_geometry: Option<iced_core::Rectangle>,
+    pub interaction_epoch: u64,
+    pub visual_popup: bool,
     preedit: Option<Preedit<P::Renderer>>,
     ime_state: Option<(iced_core::Rectangle, input_method::Purpose)>,
 }
@@ -131,6 +135,10 @@ where
                 state,
                 mouse_interaction: mouse::Interaction::Idle,
                 popup_settings: None,
+                popup_pose: None,
+                popup_geometry: None,
+                interaction_epoch: 0,
+                visual_popup: false,
                 preedit: None,
                 ime_state: None,
             },
@@ -235,6 +243,18 @@ where
                 &Rectangle::new(Point::ORIGIN, self.state.viewport().logical_size()),
             );
         }
+    }
+
+    pub fn presented_ime_cursor(&self) -> Option<iced_core::Rectangle> {
+        self.ime_state.map(|(cursor, _)| {
+            let cursor = self
+                .popup_pose
+                .map_or(cursor, |pose| cursor * pose.transformation);
+            cursor * self.state.application_scale_factor() as f32
+        })
+    }
+    pub fn ime_descriptor(&self) -> Option<(iced_core::Rectangle, input_method::Purpose)> {
+        self.ime_state
     }
 
     fn update_ime(&mut self, cursor: iced_core::Rectangle, purpose: input_method::Purpose) {
