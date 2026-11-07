@@ -281,6 +281,7 @@ impl<T> Dispatch<wl_keyboard::WlKeyboard, ()> for WindowState<T> {
             wl_keyboard::Event::Key {
                 state: keystate,
                 key,
+                serial,
                 ..
             } => {
                 let surface_id = state.keyboard_focus_id();
@@ -292,6 +293,12 @@ impl<T> Dispatch<wl_keyboard::WlKeyboard, ()> for WindowState<T> {
                     }
                 };
                 let key = key + 8;
+
+                super::record_popup_press(
+                    &mut state.last_input_serial,
+                    serial,
+                    pressed_state == ElementState::Pressed,
+                );
 
                 let Some(keyboard_state) = state
                     .seats
@@ -662,10 +669,11 @@ impl<T> Dispatch<wl_pointer::WlPointer, ()> for WindowState<T> {
                 button,
                 time,
             } => {
-                if matches!(btnstate, WEnum::Value(wl_pointer::ButtonState::Pressed)) {
-                    state.button_serial = Some(serial);
-                    state.last_button_serial = Some(serial);
-                }
+                super::record_popup_press(
+                    &mut state.last_input_serial,
+                    serial,
+                    matches!(btnstate, WEnum::Value(wl_pointer::ButtonState::Pressed)),
+                );
                 if let Some(mouse_surface) = mouse_surface.cloned() {
                     state.update_active_output(&mouse_surface);
                 }

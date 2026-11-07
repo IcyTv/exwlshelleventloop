@@ -102,6 +102,32 @@
 //! ```
 //!
 pub use events::NewInputPanelSettings;
+
+fn record_popup_press(last: &mut Option<u32>, serial: u32, pressed: bool) {
+    if pressed {
+        *last = Some(serial);
+    }
+}
+
+#[cfg(test)]
+mod popup_input_tests {
+    use super::WindowState;
+
+    #[test]
+    fn popup_grabs_use_latest_press_not_release_or_stale_pointer_serial() {
+        let mut state = WindowState::<()>::new("popup-input-test");
+        assert_eq!(state.take_popup_grab_serial(), None);
+        super::record_popup_press(&mut state.last_input_serial, 10, true); // pointer invocation
+        super::record_popup_press(&mut state.last_input_serial, 11, false);
+        assert_eq!(state.take_popup_grab_serial(), Some(10));
+        super::record_popup_press(&mut state.last_input_serial, 20, true); // keyboard invocation
+        super::record_popup_press(&mut state.last_input_serial, 21, false);
+        assert_eq!(state.take_popup_grab_serial(), Some(20));
+        assert_eq!(state.take_popup_grab_serial(), Some(20)); // nested popup
+        super::record_popup_press(&mut state.last_input_serial, 30, true);
+        assert_eq!(state.take_popup_grab_serial(), Some(30));
+    }
+}
 pub use events::NewLayerShellSettings;
 pub use events::NewXdgWindowSettings;
 pub use events::OutputOption;
@@ -1155,8 +1181,7 @@ pub struct WindowState<T> {
     return_data: Vec<ReturnData<T>>,
     finger_locations: HashMap<i32, (f64, f64)>,
     enter_serial: Option<u32>,
-    button_serial: Option<u32>,
-    last_button_serial: Option<u32>,
+    last_input_serial: Option<u32>,
 
     start_mode: StartMode,
     init_finished: bool,
@@ -1178,9 +1203,10 @@ impl<T: 'static> WindowState<T> {
         self.return_data.push(data);
     }
 
-    /// Take the serial to use for the next popup grab, consuming it.
+    /// Latest qualifying press serial, retained for nested popup grabs too.
+    /// Key releases must not replace the serial of a keyboard invocation.
     pub fn take_popup_grab_serial(&mut self) -> Option<u32> {
-        self.button_serial.take().or(self.last_button_serial)
+        self.last_input_serial
     }
 
     /// Compute the minimum dispatch timeout across all window units.
@@ -1759,8 +1785,7 @@ impl<T> Default for WindowState<T> {
             return_data: Vec::new(),
             finger_locations: HashMap::new(),
             enter_serial: None,
-            button_serial: None,
-            last_button_serial: None,
+            last_input_serial: None,
 
             start_mode: StartMode::Active,
             init_finished: false,
@@ -3464,16 +3489,13 @@ impl<T: 'static> WindowState<T> {
                                     shell.get_popup(&popup);
                                     popup
                                 }
-                                Shell::PopUp((_, parent_xdg_surface)) => wl_xdg_surface.get_popup(
-                                    Some(parent_xdg_surface),
-                                    &positioner,
-                                    &qh,
-                                    (),
-                                ),
+                                Shell::PopUp((_, parent_xdg_surface))
+                                | Shell::XdgTopLevel((_, parent_xdg_surface, _)) => wl_xdg_surface
+                                    .get_popup(Some(parent_xdg_surface), &positioner, &qh, ()),
                                 _ => {
                                     log::warn!(
                                         target: "exwlshellev",
-                                        "popup parent {:?} is neither a layer surface nor a popup; skipping popup creation",
+                                        "popup parent {:?} does not support xdg popups; skipping popup creation",
                                         id
                                     );
                                     positioner.destroy();
