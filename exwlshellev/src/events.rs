@@ -68,6 +68,8 @@ pub enum ExWlShellEvent<'a, T, Message> {
     ),
     /// Some thing KeyboardEvent, TouchEvent, MouseEvent and etc.
     RequestMessages(&'a DispatchMessage),
+    /// A requested window could not be created. No surface was mapped.
+    WindowCreationFailed(Option<T>),
     /// Nothing happened, you can do some other things after it, like to refresh the ui, and etc.
     NormalDispatch,
     /// It return the event you passed with message_receiver, and return it back.
@@ -164,6 +166,8 @@ pub struct PopUpRepositionSettings {
 /// Settings used to create a new xdg toplevel window.
 #[derive(Debug, PartialEq, Eq, Clone, Default)]
 pub struct NewXdgWindowSettings {
+    /// A live xdg toplevel parent, resolved before the initial surface commit.
+    pub parent: Option<Id>,
     /// The window title.
     pub title: Option<String>,
     /// The initial window size.
@@ -229,6 +233,7 @@ pub enum ReturnData<INFO> {
     NewPopUp((NewPopUpSettings, id::Id, Option<INFO>)),
     PopUpReposition((PopUpRepositionSettings, id::Id)),
     NewXdgBase((NewXdgWindowSettings, id::Id, Option<INFO>)),
+    RequestMove(Id),
     NewInputPanel((NewInputPanelSettings, id::Id, Option<INFO>)),
     None,
 }

@@ -141,6 +141,8 @@ mod events;
 mod seat;
 mod size;
 mod strtoshape;
+#[cfg(test)]
+mod toplevel_tests;
 pub mod visual;
 
 use events::DispatchMessageInner;
@@ -1115,6 +1117,14 @@ impl From<Connection> for WithConnection {
     }
 }
 
+#[derive(Debug)]
+struct MoveGrab {
+    window: id::Id,
+    seat: WlSeat,
+    pointer: wayland_client::protocol::wl_pointer::WlPointer,
+    serial: u32,
+}
+
 /// main state, store the main information
 #[derive(Debug)]
 pub struct WindowState<T> {
@@ -1182,6 +1192,7 @@ pub struct WindowState<T> {
     finger_locations: HashMap<i32, (f64, f64)>,
     enter_serial: Option<u32>,
     last_input_serial: Option<u32>,
+    move_grab: Option<MoveGrab>,
 
     start_mode: StartMode,
     init_finished: bool,
@@ -1199,6 +1210,32 @@ pub struct WindowState<T> {
 }
 
 impl<T: 'static> WindowState<T> {
+    fn resolve_toplevel_parent(
+        &self,
+        child: id::Id,
+        parent: Option<id::Id>,
+    ) -> Result<Option<XdgToplevel>, ()> {
+        match parent {
+            None => Ok(None),
+            Some(parent) if parent != child => self.toplevel(parent).map(Some).ok_or(()),
+            Some(_) => Err(()),
+        }
+    }
+
+    fn take_move_request(&mut self, id: id::Id) -> Option<(XdgToplevel, MoveGrab)> {
+        let grab = self.move_grab.take()?;
+        if grab.window != id || !grab.seat.is_alive() || !grab.pointer.is_alive() {
+            return None;
+        }
+        Some((self.toplevel(id)?, grab))
+    }
+
+    fn toplevel(&self, id: id::Id) -> Option<XdgToplevel> {
+        match &self.get_unit_with_id(id)?.shell {
+            Shell::XdgTopLevel((toplevel, _, _)) => Some(toplevel.clone()),
+            _ => None,
+        }
+    }
     pub fn append_return_data(&mut self, data: ReturnData<T>) {
         self.return_data.push(data);
     }
@@ -1786,6 +1823,7 @@ impl<T> Default for WindowState<T> {
             finger_locations: HashMap::new(),
             enter_serial: None,
             last_input_serial: None,
+            move_grab: None,
 
             start_mode: StartMode::Active,
             init_finished: false,
@@ -2647,7 +2685,7 @@ impl<T: 'static> WindowState<T> {
         self.output_state = Some(OutputState::new(&globals, &qh));
         let seat_state = SeatState::new(&globals, &qh);
         for seat in seat_state.seats() {
-            self.seats.insert(seat.id(), SeatStorage::new());
+            self.seats.insert(seat.id(), SeatStorage::new(seat.clone()));
         }
         self.seat_state = Some(seat_state);
         let wmcompositer = globals.bind::<WlCompositor, _, _>(&qh, 1..=5, ())?;
@@ -3590,8 +3628,19 @@ impl<T: 'static> WindowState<T> {
                             positioner.destroy();
                             unit.pending_reposition = Some(token);
                         }
+                        ReturnData::RequestMove(id) => {
+                            log::debug!(
+                                "Toplevel move request {:?}, valid press: {}",
+                                id,
+                                window_state.move_grab.is_some()
+                            );
+                            if let Some((toplevel, grab)) = window_state.take_move_request(id) {
+                                toplevel._move(&grab.seat, grab.serial);
+                            }
+                        }
                         ReturnData::NewXdgBase((
                             NewXdgWindowSettings {
+                                parent,
                                 title,
                                 size,
                                 client_side_decorations,
@@ -3599,9 +3648,25 @@ impl<T: 'static> WindowState<T> {
                             id,
                             info,
                         )) => {
+                            let parent = match window_state.resolve_toplevel_parent(id, parent) {
+                                Ok(parent) => parent,
+                                Err(()) => {
+                                    log::warn!("Rejecting xdg window with invalid parent");
+                                    window_state.handle_event(
+                                        &mut *event_handler,
+                                        ExWlShellEvent::WindowCreationFailed(info),
+                                        Some(id),
+                                    );
+                                    continue;
+                                }
+                            };
                             let wl_surface = wmcompositer.create_surface(&qh, ());
                             let wl_xdg_surface = wmbase.get_xdg_surface(&wl_surface, &qh, ());
                             let toplevel = wl_xdg_surface.get_toplevel(&qh, ());
+
+                            if let Some(parent) = &parent {
+                                toplevel.set_parent(Some(parent));
+                            }
 
                             toplevel.set_title(title.unwrap_or("".to_owned()));
 

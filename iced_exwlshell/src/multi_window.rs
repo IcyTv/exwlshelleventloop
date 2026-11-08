@@ -319,6 +319,10 @@ where
                 waiting_layer_shell_events
                     .push_back((layer_shell_id, IcedWlShellEvent::Window(window_event)));
             }
+            ExWlShellEvent::WindowCreationFailed(Some(id)) => {
+                waiting_layer_shell_events
+                    .push_back((None, IcedWlShellEvent::WindowCreationFailed(id)));
+            }
             ExWlShellEvent::UserEvent(event) => {
                 waiting_layer_shell_events
                     .push_back((layer_shell_id, IcedWlShellEvent::UserAction(event)));
@@ -586,6 +590,15 @@ where
         }
 
         match layer_shell_event {
+            IcedWlShellEvent::WindowCreationFailed(id) => {
+                // Closed before Opened is an explicit failed-creation outcome.
+                self.runtime
+                    .broadcast(iced_futures::subscription::Event::Interaction {
+                        window: id,
+                        event: IcedEvent::Window(IcedWindowEvent::Closed),
+                        status: iced_core::event::Status::Ignored,
+                    });
+            }
             IcedWlShellEvent::UpdateInputRegion(region) => self.wl_input_region = Some(region),
             IcedWlShellEvent::Window(ExwlShellWindowEvent::Refresh) => {
                 self.handle_refresh_event(ev, layer_shell_id)
@@ -1922,9 +1935,23 @@ where
                 id: iced_id,
                 ..
             } => {
+                let parent = settings
+                    .parent
+                    .and_then(|parent| self.window_manager.get(parent).map(|w| w.id));
+                if settings.parent.is_some() && parent.is_none() {
+                    self.runtime
+                        .broadcast(iced_futures::subscription::Event::Interaction {
+                            window: iced_id,
+                            event: IcedEvent::Window(IcedWindowEvent::Closed),
+                            status: iced_core::event::Status::Ignored,
+                        });
+                    return;
+                }
                 let layer_shell_id = exwlshellev::id::Id::unique();
+                let mut settings: exwlshellev::NewXdgWindowSettings = settings.into();
+                settings.parent = parent;
                 ev.append_return_data(ReturnData::NewXdgBase((
-                    settings.into(),
+                    settings,
                     layer_shell_id,
                     Some(iced_id),
                 )));
@@ -2697,6 +2724,11 @@ pub(crate) fn run_action<P, C, E: Executor>(
             ev.request_refresh_all(RefreshRequest::NextFrame);
         }
         Action::Window(action) => match action {
+            WindowAction::Drag(id) => {
+                if let Some(window) = window_manager.get(id) {
+                    ev.append_return_data(ReturnData::RequestMove(window.id));
+                }
+            }
             WindowAction::Close(id) => {
                 waiting_layer_shell_actions.push((Some(id), ExwlShellCustomAction::RemoveWindow));
             }

@@ -85,6 +85,8 @@ impl<T> WindowState<T> {
 
 #[derive(Debug, Default)]
 pub(crate) struct SeatStorage {
+    pub seat: Option<WlSeat>,
+    pub pointer_surface: Option<crate::id::Id>,
     pub touch: Option<WlTouch>,
     pub pointer: Option<WlPointer>,
     pub keyboard_state: Option<xkb_keyboard::KeyboardState>,
@@ -111,8 +113,10 @@ impl Drop for SeatStorage {
 }
 
 impl SeatStorage {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn new(seat: WlSeat) -> Self {
+        let mut storage = Self::default();
+        storage.seat = Some(seat);
+        storage
     }
 }
 impl<T: 'static> SeatHandler for WindowState<T> {
@@ -120,7 +124,7 @@ impl<T: 'static> SeatHandler for WindowState<T> {
         self.seat_state.as_mut().unwrap()
     }
     fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
-        self.seats.insert(seat.id(), SeatStorage::new());
+        self.seats.insert(seat.id(), SeatStorage::new(seat.clone()));
     }
     fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
         let _ = self.seats.remove(&seat.id());
@@ -669,6 +673,28 @@ impl<T> Dispatch<wl_pointer::WlPointer, ()> for WindowState<T> {
                 button,
                 time,
             } => {
+                if button == 272 {
+                    if matches!(btnstate, WEnum::Value(wl_pointer::ButtonState::Pressed)) {
+                        state.move_grab = state
+                            .seats
+                            .values()
+                            .find(|s| s.pointer.as_ref() == Some(pointer))
+                            .and_then(|s| {
+                                Some(super::MoveGrab {
+                                    window: s.pointer_surface?,
+                                    seat: s.seat.clone()?,
+                                    pointer: pointer.clone(),
+                                    serial,
+                                })
+                            });
+                    } else if state
+                        .move_grab
+                        .as_ref()
+                        .is_some_and(|g| g.pointer == *pointer)
+                    {
+                        state.move_grab = None;
+                    }
+                }
                 super::record_popup_press(
                     &mut state.last_input_serial,
                     serial,
@@ -688,6 +714,20 @@ impl<T> Dispatch<wl_pointer::WlPointer, ()> for WindowState<T> {
                 ));
             }
             wl_pointer::Event::Leave { .. } => {
+                if let Some(seat) = state
+                    .seats
+                    .values_mut()
+                    .find(|s| s.pointer.as_ref() == Some(pointer))
+                {
+                    seat.pointer_surface = None;
+                }
+                if state
+                    .move_grab
+                    .as_ref()
+                    .is_some_and(|g| g.pointer == *pointer)
+                {
+                    state.move_grab = None;
+                }
                 let surface_id = state
                     .active_surfaces
                     .remove(&None)
@@ -707,6 +747,13 @@ impl<T> Dispatch<wl_pointer::WlPointer, ()> for WindowState<T> {
                 surface_y,
             } => {
                 let surface_id = state.get_id_from_surface(&surface);
+                if let Some(seat) = state
+                    .seats
+                    .values_mut()
+                    .find(|s| s.pointer.as_ref() == Some(pointer))
+                {
+                    seat.pointer_surface = surface_id;
+                }
                 state
                     .active_surfaces
                     .insert(None, (surface.clone(), surface_id));

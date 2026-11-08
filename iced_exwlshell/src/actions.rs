@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Default)]
 pub struct IcedXdgWindowSettings {
+    /// A live xdg toplevel that owns this transient window.
+    pub parent: Option<IcedId>,
     /// The initial window size.
     pub size: Option<PixelSize>,
     /// Request client-side decorations instead of the default server-side mode.
@@ -23,6 +25,8 @@ pub struct IcedXdgWindowSettings {
 impl From<IcedXdgWindowSettings> for NewXdgWindowSettings {
     fn from(val: IcedXdgWindowSettings) -> Self {
         NewXdgWindowSettings {
+            // The adapter resolves Iced IDs before submitting creation.
+            parent: None,
             title: None,
             size: val.size,
             client_side_decorations: val.client_side_decorations,

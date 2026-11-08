@@ -118,6 +118,7 @@ pub enum WindowEvent {
 
 #[derive(Debug)]
 pub enum IcedWlShellEvent<Message> {
+    WindowCreationFailed(iced_core::window::Id),
     UpdateInputRegion(WlRegion),
     Window(WindowEvent),
     UserAction(Action<Message>),
