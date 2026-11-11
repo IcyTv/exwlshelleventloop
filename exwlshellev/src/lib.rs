@@ -2263,6 +2263,15 @@ impl<T> Dispatch<xdg_popup::XdgPopup, ()> for WindowState<T> {
                     return;
                 };
                 state.units[unit_index].popup_position = (x, y);
+                state.message.push((
+                    Some(state.units[unit_index].id),
+                    DispatchMessageInner::PopupConfigured {
+                        x,
+                        y,
+                        width: width.max(0) as u32,
+                        height: height.max(0) as u32,
+                    },
+                ));
                 state.units[unit_index].size = state.units[unit_index]
                     .popup_surface_geometry
                     .map_or((width as u32, height as u32), |(_, capacity)| capacity);

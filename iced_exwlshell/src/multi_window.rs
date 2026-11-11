@@ -1542,6 +1542,24 @@ where
                     output: output.clone(),
                 });
         }
+        if let ExwlShellWindowEvent::PopupConfigured {
+            x,
+            y,
+            width,
+            height,
+        } = &event
+        {
+            self.shell_broadcast
+                .send(shell::ShellEvent::PopupConfigured {
+                    window: iced_id,
+                    geometry: shell::PopupGeometry {
+                        x: *x,
+                        y: *y,
+                        width: *width,
+                        height: *height,
+                    },
+                });
+        }
         // In previous implementation, event without layer_shell_id won't call `update` here, but
         // will broadcast to the application. I'm not sure why, but I think it is
         // reasonable to call `update` here.

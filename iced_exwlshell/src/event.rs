@@ -108,6 +108,12 @@ pub enum WindowEvent {
     Closed,
     ThemeChanged(iced_core::theme::Mode),
     OutputChanged(Option<OutputInfo>),
+    PopupConfigured {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    },
     OutputAdded(OutputInfo),
     OutputUpdated(OutputInfo),
     OutputRemoved(OutputInfo),
@@ -137,6 +143,17 @@ impl WindowEvent {
                 content_updated_at: *content_updated_at,
             },
             DispatchMessage::RequestRefresh { .. } => WindowEvent::Refresh,
+            DispatchMessage::PopupConfigured {
+                x,
+                y,
+                width,
+                height,
+            } => WindowEvent::PopupConfigured {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            },
             DispatchMessage::Closed => WindowEvent::Closed,
             DispatchMessage::MouseEnter {
                 surface_x: x,

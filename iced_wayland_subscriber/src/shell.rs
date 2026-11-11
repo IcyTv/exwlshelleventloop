@@ -25,9 +25,22 @@ pub struct ShellInfo {
     pub shell: ShellType,
 }
 
+/// Final compositor placement, after flips and slides. Coordinates and dimensions
+/// use Wayland surface units, before the application's own scale factor. Position
+/// is relative to the parent window geometry, not the output or the parent buffer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PopupGeometry {
+    pub x: i32,
+    pub y: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 pub enum ShellEvent {
+    /// Latest resolved placement of a popup; replayed while that surface is alive.
+    PopupConfigured { window: Id, geometry: PopupGeometry },
     /// A submitted UI snapshot became visible, confirmed by wp_presentation.
     /// This is not a redraw request or wl_surface.frame callback. Discarded
     /// buffers never produce this event. Not replayed to late subscribers.
@@ -67,6 +80,7 @@ struct Registry {
     outputs: BTreeMap<Id, Option<OutputInfo>>,
     /// shells still alive, replayed to new subscribers
     shells: BTreeMap<Id, ShellType>,
+    popups: BTreeMap<Id, PopupGeometry>,
     /// monitors still connected, keyed by `wl_registry` global name and
     /// replayed to new subscribers
     monitors: BTreeMap<u32, OutputInfo>,
@@ -153,6 +167,12 @@ impl ShellReceiver {
                     output: output.clone(),
                 });
             }
+            for (window, geometry) in &registry.popups {
+                let _ = sender.unbounded_send(ShellEvent::PopupConfigured {
+                    window: *window,
+                    geometry: *geometry,
+                });
+            }
             registry
                 .subscribers
                 .retain(|subscriber| !subscriber.is_closed());
@@ -169,12 +189,18 @@ fn publish(registry: &mut Registry, event: ShellEvent) {
             registry.shells.insert(info.window, info.shell);
         }
         ShellEvent::Closed(window) => {
+            registry.popups.remove(window);
             registry.outputs.remove(window);
             registry.shells.remove(window);
         }
         ShellEvent::WindowOutputChanged { window, output } => {
             if registry.shells.contains_key(window) {
                 registry.outputs.insert(*window, output.clone());
+            }
+        }
+        ShellEvent::PopupConfigured { window, geometry } => {
+            if registry.shells.get(window) == Some(&ShellType::PopUp) {
+                registry.popups.insert(*window, *geometry);
             }
         }
         ShellEvent::OutputAdded(info) | ShellEvent::OutputUpdated(info) => {
@@ -198,6 +224,58 @@ fn publish(registry: &mut Registry, event: ShellEvent) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn popup_geometry_retains_latest_constrained_placement_only_while_alive() {
+        let mut registry = Registry::default();
+        let window = Id::unique();
+        publish(
+            &mut registry,
+            ShellEvent::NewShell(ShellInfo {
+                window,
+                shell: ShellType::PopUp,
+            }),
+        );
+        let (sender, mut receiver) = mpsc::unbounded();
+        registry.subscribers.push(sender);
+        let geometry = PopupGeometry {
+            x: -220,
+            y: -48,
+            width: 220,
+            height: 160,
+        };
+
+        publish(
+            &mut registry,
+            ShellEvent::PopupConfigured { window, geometry },
+        );
+
+        assert_eq!(registry.popups.get(&window), Some(&geometry));
+        assert!(
+            matches!(receiver.try_recv(), Ok(ShellEvent::PopupConfigured { window: id, geometry: actual }) if id == window && actual == geometry)
+        );
+
+        let slid = PopupGeometry { y: -24, ..geometry };
+        publish(
+            &mut registry,
+            ShellEvent::PopupConfigured {
+                window,
+                geometry: slid,
+            },
+        );
+        assert_eq!(registry.popups.get(&window), Some(&slid));
+
+        publish(&mut registry, ShellEvent::Closed(window));
+        assert!(registry.popups.is_empty());
+        publish(
+            &mut registry,
+            ShellEvent::PopupConfigured { window, geometry },
+        );
+        assert!(
+            registry.popups.is_empty(),
+            "late feedback must not become replay state"
+        );
+    }
 
     #[test]
     fn presentation_feedback_preserves_window_and_snapshot_without_replay_state() {

@@ -373,6 +373,12 @@ pub(crate) enum DispatchMessageInner {
         scale_float: f64,
     },
     OutputChanged(Option<WlOutput>),
+    PopupConfigured {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    },
     Locked,
     LockFinished,
     Ime(Ime),
@@ -488,6 +494,13 @@ pub enum DispatchMessage {
     OutputUpdated(OutputInfo),
     /// monitor was disconnected
     OutputRemoved(OutputInfo),
+    /// Compositor-resolved popup geometry in parent-relative surface coordinates.
+    PopupConfigured {
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+    },
     Locked,
     LockDenied,
     LockFinished,
@@ -607,6 +620,17 @@ impl From<DispatchMessageInner> for DispatchMessage {
             },
             DispatchMessageInner::Ime(ime) => DispatchMessage::Ime(ime),
             DispatchMessageInner::OutputChanged(output) => DispatchMessage::OutputChanged(output),
+            DispatchMessageInner::PopupConfigured {
+                x,
+                y,
+                width,
+                height,
+            } => DispatchMessage::PopupConfigured {
+                x,
+                y,
+                width,
+                height,
+            },
             DispatchMessageInner::Locked => DispatchMessage::Locked,
             DispatchMessageInner::LockFinished => DispatchMessage::LockFinished,
         }
