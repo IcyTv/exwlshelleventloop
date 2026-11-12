@@ -230,6 +230,29 @@ pub enum ExwlShellCustomAction {
     ForgetLastOutput,
     Lock,
     UnLock,
+    /// Register a nonblocking callback for drag-and-drop events.
+    DndListen(crate::dnd::Listener),
+    /// Start a copy-only drag with an application-owned source identifier.
+    DndStart(crate::dnd::SourceData),
+    /// Accept a MIME type for an incoming offer, or reject it with `None`.
+    DndAccept {
+        offer: u64,
+        mime: Option<String>,
+    },
+    /// Receive a dropped copy offer using its incoming offer identifier.
+    DndReceive {
+        offer: u64,
+        mime: String,
+    },
+    /// Complete an incoming offer after asynchronous application work finishes.
+    DndFinish {
+        offer: u64,
+        success: bool,
+    },
+    /// Cancel an outgoing source, not an incoming offer with the same number.
+    DndCancel {
+        source: u64,
+    },
 }
 
 /// Please do not use this struct directly

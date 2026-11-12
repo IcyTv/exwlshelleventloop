@@ -45,6 +45,7 @@ pub use iced_exwlshell_macros::{to_exwlshell_message, to_layer_message, to_sessi
 
 pub use error::Error;
 pub use iced_wayland_subscriber::shell;
+pub mod dnd;
 
 /// Hook invoked for every surface the runtime materializes
 pub type NewShellHook<Message> = Box<dyn Fn(shell::ShellInfo) -> Option<Message>>;

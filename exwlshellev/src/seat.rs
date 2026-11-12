@@ -123,10 +123,12 @@ impl<T: 'static> SeatHandler for WindowState<T> {
     fn seat_state(&mut self) -> &mut sctk::seat::SeatState {
         self.seat_state.as_mut().unwrap()
     }
-    fn new_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+    fn new_seat(&mut self, _conn: &Connection, qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.add_dnd_seat(&seat, qh);
         self.seats.insert(seat.id(), SeatStorage::new(seat.clone()));
     }
     fn remove_seat(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, seat: wl_seat::WlSeat) {
+        self.remove_dnd_seat(&seat);
         let _ = self.seats.remove(&seat.id());
     }
     fn new_capability(

@@ -1208,6 +1208,7 @@ dependencies = [
  "calloop-wayland-source 0.4.1",
  "log",
  "raw-window-handle",
+ "rustix 1.1.4",
  "smithay-client-toolkit 0.21.1",
  "tempfile",
  "thiserror 2.0.20",

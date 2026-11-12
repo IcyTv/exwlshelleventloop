@@ -68,6 +68,12 @@ pub fn to_exwlshell_message(
             RemoveWindow(iced_exwlshell::reexport::IcedId),
             /// Action, forget last outptu
             ForgetLastOutput,
+            DndListen { id: iced_exwlshell::reexport::IcedId, listener: iced_exwlshell::dnd::Listener },
+            DndStart { id: iced_exwlshell::reexport::IcedId, data: iced_exwlshell::dnd::SourceData },
+            DndAccept { id: iced_exwlshell::reexport::IcedId, offer: u64, mime: Option<String> },
+            DndReceive { id: iced_exwlshell::reexport::IcedId, offer: u64, mime: String },
+            DndFinish { id: iced_exwlshell::reexport::IcedId, offer: u64, success: bool },
+            DndCancel { id: iced_exwlshell::reexport::IcedId, source: u64 },
             /// Action, Lock
             Lock,
             /// Action, UnLock
@@ -136,6 +142,12 @@ pub fn to_exwlshell_message(
                         Self::NewInputPanel {settings, id } => Ok(ExwlShellCustomActionWithId::new(None, ExwlShellCustomAction::NewInputPanel { settings, id })),
                         Self::RemoveWindow(id) => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::RemoveWindow)),
                         Self::ForgetLastOutput => Ok(ExwlShellCustomActionWithId::new(None, ExwlShellCustomAction::ForgetLastOutput)),
+                        Self::DndListen { id, listener } => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::DndListen(listener))),
+                        Self::DndStart { id, data } => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::DndStart(data))),
+                        Self::DndAccept { id, offer, mime } => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::DndAccept { offer, mime })),
+                        Self::DndReceive { id, offer, mime } => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::DndReceive { offer, mime })),
+                        Self::DndFinish { id, offer, success } => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::DndFinish { offer, success })),
+                        Self::DndCancel { id, source } => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::DndCancel { source })),
                         Self::BlurOptionChange {id, option} => Ok(ExwlShellCustomActionWithId::new(Some(id), ExwlShellCustomAction::BlurOptionChange(option))),
                         Self::Lock => Ok(ExwlShellCustomActionWithId::new(None, ExwlShellCustomAction::Lock)),
                         Self::UnLock => Ok(ExwlShellCustomActionWithId::new(None, ExwlShellCustomAction::UnLock)),

@@ -13,6 +13,7 @@ description = "extra shell binding for layershell with winit like eventloop"
 
 [dependencies]
 tempfile.workspace = true
+rustix = { workspace = true, features = ["fs"] }
 thiserror.workspace = true
 wayland-client.workspace = true
 

@@ -139,6 +139,7 @@ pub mod blur;
 pub mod dpi;
 mod events;
 mod seat;
+pub mod dnd;
 mod size;
 mod strtoshape;
 #[cfg(test)]
@@ -1162,6 +1163,7 @@ pub struct WindowState<T> {
     output_state: Option<OutputState>,
     // base managers
     seat_state: Option<SeatState>,
+    dnd: dnd::State,
     seats: HashMap<ObjectId, SeatStorage>,
     seat_back: Option<WlSeat>,
 
@@ -1280,6 +1282,7 @@ impl<T: 'static> WindowState<T> {
     fn remove_shell(&mut self, id: id::Id) -> Option<()> {
         let index = self.units.iter().position(|unit| unit.id == id)?;
 
+        self.remove_dnd_window(id);
         if self.keyboard_focus.as_ref() == Some(&self.units[index].window.wl_surface) {
             self.keyboard_focus = None;
         }
@@ -1798,6 +1801,7 @@ impl<T> Default for WindowState<T> {
             registry_state: None,
 
             seat_state: None,
+            dnd: dnd::State::default(),
             seats: HashMap::new(),
             seat_back: None,
 
@@ -2691,9 +2695,11 @@ impl<T: 'static> WindowState<T> {
         self.presentation = globals.bind::<WpPresentation, _, _>(&qh, 1..=1, ()).ok();
 
         self.registry_state = Some(RegistryState::new(&globals));
+        self.dnd = dnd::State::bind(&globals, &qh);
         self.output_state = Some(OutputState::new(&globals, &qh));
         let seat_state = SeatState::new(&globals, &qh);
         for seat in seat_state.seats() {
+            self.add_dnd_seat(&seat, &qh);
             self.seats.insert(seat.id(), SeatStorage::new(seat.clone()));
         }
         self.seat_state = Some(seat_state);
@@ -2961,8 +2967,10 @@ impl<T: 'static> WindowState<T> {
         let globals = self.globals.take().unwrap();
         let mut event_queue_origin = self.event_queue.take().unwrap();
         let qh = event_queue_origin.handle();
-        let wmcompositer = self.wl_compositor.take().unwrap();
-        let shm = self.shm.take().unwrap();
+        // Runtime actions such as drag icons also create surfaces and buffers.
+        // Keep these globals available in WindowState throughout dispatch.
+        let wmcompositer = self.wl_compositor.as_ref().unwrap().clone();
+        let shm = self.shm.as_ref().unwrap().clone();
         let fractional_scale_manager = self.fractional_scale_manager.take();
         let cursor_manager: Option<WpCursorShapeManagerV1> = self.cursor_manager.take();
         let connection = self.connection.take().unwrap();
@@ -3042,12 +3050,16 @@ impl<T: 'static> WindowState<T> {
             }
         }
 
-        fn remove_lock_units<T>(window_state: &mut WindowState<T>) {
-            for removed in window_state.units.extract_if(.., |unit| unit.is_lock()) {
-                if window_state.keyboard_focus.as_ref() == Some(&removed.window.wl_surface) {
-                    window_state.keyboard_focus = None;
-                }
-                window_state.closed_ids.push(removed.id);
+        fn remove_lock_units<T: 'static>(window_state: &mut WindowState<T>) {
+            let ids: Vec<_> = window_state
+                .units
+                .iter()
+                .filter(|unit| unit.is_lock())
+                .map(|unit| unit.id)
+                .collect();
+            for id in ids {
+                window_state.remove_shell(id);
+                window_state.closed_ids.push(id);
             }
         }
 

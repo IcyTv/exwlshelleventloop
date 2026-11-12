@@ -381,6 +381,7 @@ where
     runtime: MultiRuntime<E, P::Message>,
     on_new_shell: Option<crate::NewShellHook<P::Message>>,
     shell_broadcast: shell::ShellSender,
+    dnd_listeners: HashMap<IcedId, crate::dnd::Listener>,
     system_theme: iced_core::theme::Mode,
     fonts: Vec<Cow<'static, [u8]>>,
     compositor: Option<C>,
@@ -427,6 +428,7 @@ where
         Self {
             on_new_shell,
             shell_broadcast,
+            dnd_listeners: HashMap::new(),
             compositor_settings,
             renderer_settings,
             runtime,
@@ -1380,6 +1382,7 @@ where
             return;
         };
         self.cached_layer_dimensions.remove(&iced_id);
+        self.dnd_listeners.remove(&iced_id);
         self.window_manager.remove(iced_id);
         self.user_interfaces.remove(&iced_id);
         self.iced_events.retain(|(id, _)| *id != iced_id);
@@ -1538,6 +1541,21 @@ where
         let Some((iced_id, window)) = id_and_window else {
             return;
         };
+        if let ExwlShellWindowEvent::Dnd(event) = &event {
+            let mut event = event.clone();
+            event.scale_coordinates(window.state.application_scale_factor());
+            if let Some(listener) = self.dnd_listeners.get(&iced_id) {
+                if !listener.send(event.clone()) {
+                    match event {
+                        crate::dnd::Event::Enter { offer, .. } | crate::dnd::Event::Drop { offer, .. } | crate::dnd::Event::Payload { offer, .. } => ev.finish_data_offer(offer, false),
+                        crate::dnd::Event::SourceStarted { source } | crate::dnd::Event::SourceDropped { source } => ev.cancel_data_source(source),
+                        _ => {},
+                    }
+                }
+            }
+            else if let crate::dnd::Event::Drop { offer, .. } = event { ev.finish_data_offer(offer, false); }
+            return;
+        }
         if let ExwlShellWindowEvent::Presented { content_updated_at } = &event {
             self.shell_broadcast.send(shell::ShellEvent::Presented {
                 window: iced_id,
@@ -1874,11 +1892,30 @@ where
             .and_then(|iced_id| self.window_manager.get(iced_id))
             .map(|window| window.id);
         if iced_id.is_some() && ex_shell_id.is_none() {
+            // Async transfer completion can arrive after its window closed.
+            // These identity-based cleanup actions must not wait for reopening.
+            match action {
+                ExwlShellCustomAction::DndFinish { offer, success } => {
+                    ev.finish_data_offer(offer, success);
+                    return;
+                }
+                ExwlShellCustomAction::DndCancel { source } => {
+                    ev.cancel_data_source(source);
+                    return;
+                }
+                _ => {}
+            }
             // still waiting
             self.waiting_layer_shell_actions.push((iced_id, action));
             return;
         }
         match action {
+            ExwlShellCustomAction::DndListen(listener) => { if let Some(id) = iced_id { self.dnd_listeners.insert(id, listener); } }
+            ExwlShellCustomAction::DndStart(data) => { if let Some(native) = ex_shell_id { ev.start_data_drag(native, data); } }
+            ExwlShellCustomAction::DndAccept { offer, mime } => ev.accept_data_offer(offer, mime),
+            ExwlShellCustomAction::DndReceive { offer, mime } => ev.receive_data_offer(offer, mime),
+            ExwlShellCustomAction::DndFinish { offer, success } => ev.finish_data_offer(offer, success),
+            ExwlShellCustomAction::DndCancel { source } => ev.cancel_data_source(source),
             ExwlShellCustomAction::BlurOptionChange(blur_option) => {
                 ref_mut_exshell_window!(ev, iced_id, ex_shell_id, layer_shell_window);
                 exshell_window.set_blur_option(blur_option);
