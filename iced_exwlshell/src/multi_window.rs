@@ -646,8 +646,12 @@ where
             }
             if let Some(visual) = self.visuals.values_mut().find(|v| v.native == Some(id)) {
                 if visual.pending.is_some() {
+                    // Presentation gating must defer widget redraws, not consume
+                    // them. Otherwise a child animation needs fresh input to tick.
+                    visual.deferred_refresh = true;
                     return;
                 }
+                visual.deferred_refresh = false;
                 // Drawing can mutate retained layout/gesture state without an
                 // application view rebuild. Old pixels must not authorize it.
                 visual.confirmed = None;
@@ -990,6 +994,7 @@ where
                     visual.finished = false;
                     visual.retire_deadline = None;
                     visual.confirmed = None;
+                    visual.deferred_refresh = false;
                     visual.native_capacity = None;
                     id
                 } else {
@@ -1481,7 +1486,12 @@ where
                         if !visual.finished {
                             ev.request_refresh(id, RefreshRequest::NextFrame);
                         } else if let Some(native) = visual.native {
-                            ev.request_refresh(native, RefreshRequest::Wait);
+                            let refresh = if mem::take(&mut visual.deferred_refresh) {
+                                RefreshRequest::NextFrame
+                            } else {
+                                RefreshRequest::Wait
+                            };
+                            ev.request_refresh(native, refresh);
                         }
                     }
                 }

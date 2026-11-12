@@ -41,6 +41,8 @@ pub(super) struct Visual<C: Compositor> {
     pub timeline: Timeline,
     pub pose: Pose,
     pub pending: Option<Submission>,
+    /// A child redraw consumed while waiting for the previous frame's proof.
+    pub deferred_refresh: bool,
     pub confirmed: Option<Submission>,
     pub native_capacity: Option<(u32, u32, u32)>,
     pub finished: bool,
@@ -79,6 +81,7 @@ impl<C: Compositor> Visual<C> {
             timeline,
             pose,
             pending: None,
+            deferred_refresh: false,
             confirmed: None,
             native_capacity: None,
             finished: false,
@@ -105,6 +108,7 @@ impl<C: Compositor> Visual<C> {
     }
     pub fn close(&mut self) {
         self.native = None;
+        self.deferred_refresh = false;
         self.inputs.clear();
         self.timeline.retarget(self.pose, true);
         self.retire_deadline = Instant::now()
